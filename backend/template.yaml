@@ -1,0 +1,27 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Parent template for the nested SAM applications.
+
+Resources:
+  FieldApp:
+    Type: AWS::Serverless::Application
+    Properties:
+      Location: fields/template.yaml
+
+  SequencesApp:
+    Type: AWS::Serverless::Application
+    Properties:
+      Location: sequences/template.yaml
+
+  CAMRIECalculationApp:
+    Type: AWS::Serverless::Application
+    Properties:
+      Location: calculate/template.yaml
+
+# Outputs:
+#   # FieldMetaDataTable:
+#     Description: "DynamoDB table output from the Field app"
+#     Value: !GetAtt FieldApp.Outputs.MarieFieldMetaDataTable
+  
+
+  # You can add additional outputs as needed

@@ -1,0 +1,28 @@
+{
+    "downloadResult": {
+        "metadata": {
+            "Date": "2024-09-01",
+            "File": "/data/PROJECTS/Architecture/lambdaKoma/cloudMR_birdcagecoil.zip",
+            "Channels": "1",
+            "Location": {
+                "Region": "us-east-1",
+                "Bucket": "camrie-app-fieldapp-1s07xzfaxwbo0-mariefieldbucket-m5dxtfkfwe54",
+                "URL": "https://camrie-app-fieldapp-1s07xzfaxwbo0-mariefieldbucket-m5dxtfkfwe54.s3.us-east-1.amazonaws.com/cloudMR_birdcagecoil-ismrm25.zip",
+                "Key": "cloudMR_birdcagecoil-ismrm25.zip"
+            },
+            "Version": "0.2.3",
+            "User": "gianni02",
+            "Phantom": "duke",
+            "Description": "Birdcage single Coil for 3T MRI scanner with Duke Phantom",
+            "ID": "cloudMR_birdcagecoil-ismrm25.zip",
+            "Coil": "birdcage",
+            "B0": "3T"
+        },
+        "fileLocation": {
+            "Region": "us-east-1",
+            "Bucket": "camrie-app-fieldapp-1s07xzfaxwbo0-mariefieldbucket-m5dxtfkfwe54",
+            "URL": "https://camrie-app-fieldapp-1s07xzfaxwbo0-mariefieldbucket-m5dxtfkfwe54.s3.us-east-1.amazonaws.com/cloudMR_birdcagecoil-ismrm25.zip",
+            "Key": "cloudMR_birdcagecoil-ismrm25.zip"
+        }
+    }
+}

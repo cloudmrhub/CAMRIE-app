@@ -1,0 +1,68 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Resources:
+  # DynamoDB Table
+  MarieFieldMetaDataTable:
+    Type: AWS::DynamoDB::Table
+    Properties: 
+      TableName: MarieFieldMetaData
+      AttributeDefinitions:
+        - AttributeName: ID
+          AttributeType: S
+      KeySchema:
+        - AttributeName: ID
+          KeyType: HASH # Partition key
+      BillingMode: PAY_PER_REQUEST # On-demand pricing
+      SSESpecification: 
+        SSEEnabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+      Tags:
+        - Key: "owner"
+          Value: "montie01"
+        - Key: "maintainer"
+          Value: "montie01"
+        - Key: "project"
+          Value: "marie"
+        - Key: "team"
+          Value: "cloudmrhub"
+        - Key: "status"
+          Value: "dev"
+        - Key: "deletable"
+          Value: "yes"
+        - Key: "purpose"
+          Value: "field metadata"
+        - Key: "description"
+          Value: "This table stores metadata about the fields in the Marie dataset."
+
+  MarieFieldBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      AccessControl: Private
+      Tags:
+        - Key: "owner"
+          Value: "montie01"
+        - Key: "maintainer"
+          Value: "montie01"
+        - Key: "project"
+          Value: "marie"
+        - Key: "team"
+          Value: "cloudmrhub"
+        - Key: "status"
+          Value: "dev"
+        - Key: "deletable"
+          Value: "yes"
+        - Key: "purpose"
+          Value: "field metadata"
+        - Key: "description"
+          Value: "This bucket stores metadata about the fields in the Marie dataset."
+
+Outputs:
+  MarieFieldMetaDataTable:
+    Value: !Ref MarieFieldMetaDataTable
+    Export:
+      Name: MarieFieldMetaDataTable
+  MarieFieldBucket:
+    Value: !Ref MarieFieldBucket
+    Export:
+      Name: MarieFieldBucket

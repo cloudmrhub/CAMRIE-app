@@ -1,0 +1,6 @@
+botocore>=1.31,<1.32
+git+https://github.com/erosmontin/pyable
+pandas
+h5py
+boto3
+numpy

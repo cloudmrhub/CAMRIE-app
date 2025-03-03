@@ -1,0 +1,70 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Resources:
+  # DynamoDB Table
+  SequenceMetaDataTable:
+    Type: AWS::DynamoDB::Table
+    Properties: 
+      TableName: SequenceMetaData
+      AttributeDefinitions:
+        - AttributeName: ID
+          AttributeType: S
+      KeySchema:
+        - AttributeName: ID
+          KeyType: HASH # Partition key
+      BillingMode: PAY_PER_REQUEST # On-demand pricing
+      SSESpecification: 
+        SSEEnabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+      Tags:
+        - Key: "owner"
+          Value: "montie01"
+        - Key: "maintainer"
+          Value: "montie01"
+        - Key: "project"
+          Value: "marie"
+        - Key: "team"
+          Value: "cloudmrhub"
+        - Key: "status"
+          Value: "dev"
+        - Key: "deletable"
+          Value: "yes"
+        - Key: "purpose"
+          Value: "sequence metadata"
+        - Key: "description"
+          Value: "This table stores metadata about the sequences."
+
+  SequenceBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      AccessControl: Private
+      Tags:
+        - Key: "owner"
+          Value: "montie01"
+        - Key: "maintainer"
+          Value: "montie01"
+        - Key: "project"
+          Value: "mtrk"
+        - Key: "team"
+          Value: "cloudmrhub"
+        - Key: "status"
+          Value: "dev"
+        - Key: "deletable"
+          Value: "yes"
+        - Key: "purpose"
+          Value: "sequence metadata"
+        - Key: "description"
+          Value: "This table stores metadata about the sequences."
+
+Outputs:
+  SequenceMetaDataTable:
+    Value: !Ref SequenceMetaDataTable
+    Export:
+      Name: SequenceMetaDataTable
+
+  SequenceBucket:
+    Value: !Ref SequenceBucket
+    Export:
+      Name: SequenceBucket
+
