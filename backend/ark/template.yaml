@@ -1,0 +1,113 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Template that reorders resources to avoid circular dependency without enforcing bucket names.
+
+
+
+Parameters:
+  
+
+  ResultsBucketPName:
+    Type: String
+    Description: "The fixed name for the Results bucket"
+    Default: "camrie-results"
+  FailedBucketPName:
+    Type: String
+    Description: "The fixed name for the Failed bucket"
+    Default: "camrie-failed"
+  
+Resources:
+
+
+  ResultsBucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: !Ref ResultsBucketPName
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders:
+              - "*"
+            AllowedMethods:
+              - GET
+              - PUT
+              - HEAD
+              - POST
+              - DELETE
+            AllowedOrigins:
+              - "*"
+            ExposedHeaders:
+              - "ETag"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerPreferred
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteUnzippedObjects
+            Status: Enabled
+            ExpirationInDays: 7
+            Prefix: unzipped/
+
+  FailedBucket:
+    Type: 'AWS::S3::Bucket'
+    DeletionPolicy: Delete
+    Properties:
+      BucketName: !Ref FailedBucketPName
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders:
+              - "*"
+            AllowedMethods:
+              - GET
+              - PUT
+              - HEAD
+              - POST
+              - DELETE
+            AllowedOrigins:
+              - "*"
+  
+
+
+  UpdateJobFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: >
+        This function updates Cloudmrhub after Mroptium computation.
+        It is triggered when an object is created in the results bucket.
+      PackageType: Zip
+      CodeUri: .
+      Handler: app.lambda_handler
+      Runtime: python3.9
+      Policies:
+        - S3FullAccessPolicy:
+            BucketName: !Ref ResultsBucketPName
+        - S3FullAccessPolicy:
+            BucketName: !Ref FailedBucketPName
+      Environment:
+        Variables:
+          ResultsBucket: !Ref ResultsBucketPName
+          FailedBucket: !Ref FailedBucketPName
+         
+      Events:
+        S3ResultsEvent:
+          Type: S3
+          Properties:
+            Bucket: !Ref ResultsBucket
+            Events: s3:ObjectCreated:*
+        S3ResultsEventFailed:
+          Type: S3
+          Properties:
+            Bucket: !Ref FailedBucket
+            Events: s3:ObjectCreated:*
+
+Outputs:
+  ResultsBucket:
+    Description: "Name of the Results bucket"
+    Value: !Ref ResultsBucket
+  FailedBucket:
+    Description: "Name of the Failed bucket"
+    Value: !Ref FailedBucket

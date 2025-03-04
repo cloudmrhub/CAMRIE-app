@@ -6,13 +6,17 @@ Description: >
   and then triggers a calculation function.
 
 
+Parameters:
+  ResultsBucketPName:
+    Type: String
+    Description: "The fixed name for the Results bucket"
+  
+  FailedBucketPName:
+    Type: String
+    Description: "The fixed name for the Failed bucket"
+  
 
 Resources:
-  # S3 Bucket that triggers the event and stores the files.
-  CamrieJobBucket:
-    Type: AWS::S3::Bucket
-    Properties:
-      AccessControl: Private
 
   # Lambda function that downloads data:
   # 1. Reads the input event (which contains {"id": "..."})
@@ -35,64 +39,77 @@ Resources:
           JOB_TABLE: !ImportValue MarieFieldMetaDataTable
           FILE_BUCKET: !ImportValue MarieFieldBucket
 
-  # Lambda function that performs the calculation using the downloaded data.
-  RunJobFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      Description: >
-        This function runs the Mroptium computation (it is the muscle worker).
-        It should be triggered when an object is created in the jobs bucket.
-      PackageType: Image
-      Timeout: 900
-      MemorySize: 10240
-      ReservedConcurrentExecutions: 300
-      EphemeralStorage:
-        Size: 10240
-      Tags:
-        owner: "montie01"
-        mantainer: "montie01"
-        project: "mroptimum"
-        version: "v1"
-        team: "cloudmrhub"
-      Policies:
-          - S3ReadPolicy:
-            BucketName: !ImportValue MarieFieldBucket
-      Environment:
-        Variables:
-         DEBUG: "False"
-    Metadata:
-      Dockerfile: Dockerfile
-      DockerContext: src/muscle/
-      DockerTag: python3.10-v1
+  # # Lambda function that performs the calculation using the downloaded data.
+  # RunJobFunction:
+  #   Type: AWS::Serverless::Function
+  #   Properties:
+  #     Description: >
+  #       This function runs the Mroptium computation (it is the muscle worker).
+  #       It should be triggered when an object is created in the jobs bucket.
+  #     PackageType: Image
+  #     Timeout: 900
+  #     MemorySize: 10240
+  #     ReservedConcurrentExecutions: 300
+  #     EphemeralStorage:
+  #       Size: 10240
+  #     Tags:
+  #       owner: "montie01"
+  #       mantainer: "montie01"
+  #       project: "mroptimum"
+  #       version: "v1"
+  #       team: "cloudmrhub"
+  #     Policies:
+  #         - S3ReadPolicy:
+  #           BucketName: !ImportValue MarieFieldBucket
+  #     Environment:
+  #       Variables:
+  #        DEBUG: "False"
+  #   Metadata:
+  #     Dockerfile: Dockerfile
+  #     DockerContext: src/muscle/
+  #     DockerTag: python3.10-v1
 
 
-  # Step Functions state machine that orchestrates the workflow.
-  CalculationStateMachine:
-    Type: AWS::Serverless::StateMachine
-    Properties:
-      Definition:
-        StartAt: DownloadData
-        States:
-          DownloadData:
-            Type: Task
-            Resource: !GetAtt DownloadDataFunction.Arn
-            ResultPath: $.downloadResult
-            Next: Calculation
-          Calculation:
-            Type: Task
-            Resource: !GetAtt CalculationAppFunction.Arn
-            # Pass the output of the DownloadData function to the calculation function.
-            Parameters:
-              downloadResult.$: $.downloadResult
-            End: true
-      Policies:
-        - AWSLambdaInvokePolicy:
-            FunctionName: !Ref DownloadDataFunction
-        - AWSLambdaInvokePolicy:
-            FunctionName: !Ref CalculationAppFunction
+  # # Step Functions state machine that orchestrates the workflow.
+  # CalculationStateMachine:
+  #   Type: AWS::Serverless::StateMachine
+  #   Properties:
+  #     Definition:
+  #       StartAt: DownloadData
+  #       States:
+  #         DownloadData:
+  #           Type: Task
+  #           Resource: !GetAtt DownloadDataFunction.Arn
+  #           ResultPath: $.downloadResult
+  #           Next: Calculation
+  #         Calculation:
+  #           Type: Task
+  #           Resource: !GetAtt CalculationAppFunction.Arn
+  #           # Pass the output of the DownloadData function to the calculation function.
+  #           Parameters:
+  #             downloadResult.$: $.downloadResult
+  #           End: true
+  #     Policies:
+  #       - AWSLambdaInvokePolicy:
+  #           FunctionName: !Ref DownloadDataFunction
+  #       - AWSLambdaInvokePolicy:
+  #           FunctionName: !Ref CalculationAppFunction
 
-Outputs:
+# Outputs:
+  # DownloadDataFunction:
+  #   Description: "Function that downloads data"
+  #   Value: !Ref DownloadDataFunction
+  #   Export:
+  #     Name: DownloadDataFunction
+  # CalculationAppFunction:
+  #   Description: "Function that performs the calculation"
+  #   Value: !Ref RunJobFunction
+  #   Export:
+  #     Name: RunJobFunction
+  # CalculationStateMachine:
+  #   Description: "State machine that orchestrates the workflow"
+  #   Value: !Ref CalculationStateMachine
+  #   Export:
+  #     Name: CalculationStateMachine
 
-  CamrieJobBucketName:
-    Description: "Name of the job bucket"
-    Value: !Ref CamrieJobBucket
+

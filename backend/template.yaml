@@ -2,7 +2,40 @@ AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: Parent template for the nested SAM applications.
 
+
+
+
+Parameters:
+  CortexHost: 
+    Type: String
+    Description: cm cortex
+    Default: 'cancelit-env-1.eba-pmamcuv5.us-east-1.elasticbeanstalk.com'
+
+Globals:
+  Function:
+    Timeout: 60
+    MemorySize: 512
+    Architectures:
+    - x86_64
+    Environment:
+      Variables:
+        Application: CAMRIE
+        Host: !Ref CortexHost
+        CloudMRApiUrl: !Sub https://${CortexHost}/api
+        PipelineScheduler: !Sub https://${CortexHost}/api/pipeline/request
+        PipelineCompleted: !Sub https://${CortexHost}/api/pipeline/completed
+        PipelineFailed: !Sub https://${CortexHost}/api/pipeline/failed
+        deleteDataAPI: !Sub https://${CortexHost}/api/data/delete 
+        updateDataAPI: !Sub https://${CortexHost}/api/data/update 
+        PipelineDeleteAPI: !Sub https://${CortexHost}/api/pipeline/delete
+
+
+
+
+
 Resources:
+
+
   FieldApp:
     Type: AWS::Serverless::Application
     Properties:
@@ -13,10 +46,21 @@ Resources:
     Properties:
       Location: sequences/template.yaml
 
+  ArkApp:
+    Type: AWS::Serverless::Application
+    Properties:
+      Location: ark/template.yaml
+
+
+
+
   CAMRIECalculationApp:
     Type: AWS::Serverless::Application
     Properties:
       Location: calculate/template.yaml
+      Parameters:
+        ResultsBucketPName: !GetAtt ArkApp.Outputs.ResultsBucket
+        FailedBucketPName: !GetAtt ArkApp.Outputs.FailedBucket
 
 # Outputs:
 #   # FieldMetaDataTable:

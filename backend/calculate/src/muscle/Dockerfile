@@ -21,9 +21,9 @@ ENV SSL_CERT_FILE /etc/ssl/certs/ca-bundle.crt
 #Koma
 RUN yum update -y && \
     yum install -y wget git tar && \
-    wget https://julialang-s3.julialang.org/bin/linux/x64/1.9/julia-1.9.0-linux-x86_64.tar.gz && \
-    tar xzf julia-1.9.0-linux-x86_64.tar.gz -C /usr --strip-components 1 && \
-    rm -rf julia-1.9.0-linux-x86_64.tar.gz
+    wget https://julialang-s3.julialang.org/bin/linux/x64/1.11/julia-1.11.3-linux-x86_64.tar.gz && \
+    tar xzf julia-1.11.3-linux-x86_64.tar.gz -C /usr --strip-components 1 && \
+    rm -rf julia-1.11.3-linux-x86_64.tar.gz
 
 # Create the JULIA_DEPOT_PATH directory
 RUN mkdir -p ${LAMBDA_TASK_ROOT}/packages
@@ -34,10 +34,21 @@ RUN chmod -R 777 ${LAMBDA_TASK_ROOT}/
 
 ENV JULIA_DEPOT_PATH ${LAMBDA_TASK_ROOT}/packages
 
-ENV JULIA_CPU_TARGET="generic;Haswell;clone_all"
+ENV JULIA_CPU_TARGET="generic"
 
 # Install Julia packages
-RUN julia -e 'using Pkg;pkg"registry add git@github.com:cloudmrhub/CloudRegistry.git";'
+RUN julia -e 'using Pkg;Pkg.Registry.add("General");'
+RUN julia -e 'using Pkg;Pkg.add(url="https://github.com/cloudmrhub/KomaNYU.jl");'
+
+RUN git config --global user.name "Your Name"
+RUN git config --global user.email "your.email@example.com"
+
+
+# RUN julia -e 'using Pkg; Pkg.Registry.add(Pkg.RegistrySpec(url="https://github.com/cloudmrhub/CloudRegistry.git"));'
+
+# RUN julia -e 'using Pkg; Pkg.add(url="https://github.com/cloudmrhub/KomaNYU.jl.git");'
+
+
 
 RUN julia -e 'using Pkg;Pkg.add(["KomaNYU","FileIO","JLD2"]);'
 
