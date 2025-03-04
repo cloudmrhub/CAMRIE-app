@@ -103,6 +103,7 @@ dynamodb = boto3.resource('dynamodb')
 
 # Get the DynamoDB table name from environment variables.
 MARIE_FIELD_TABLE_NAME = os.environ.get('MARIE_FIELD_TABLE_NAME', 'MarieFieldMetaData')
+SEQUENCE_TABLE_NAME = os.environ.get('SEUQUENCE_TABLE_NAME', 'SequenceMetaData')
 
 def handler(event, context):
     """
@@ -110,7 +111,7 @@ def handler(event, context):
     
     Expected S3 object (JSON) content:
       {
-         "file_id": "cloudMR_birdcagecoil-ismrm25.zip"
+         "field_id": "cloudMR_birdcagecoil-ismrm25.zip"
       }
       
     DynamoDB item schema (example):
@@ -165,10 +166,14 @@ def handler(event, context):
             "body": json.dumps({"error": error_msg})
         }
     print("JSON data:", json.dumps(data))
-    # Extract the file id from the uploaded JSON.
-    file_id = data.get("field_id")
-    if not file_id:
-        error_msg = "Uploaded JSON is missing the 'id' field."
+    
+    
+    
+    # Extract the sequence
+    seq_id = data.get("seq_id")
+    
+    if not seq_id:
+        error_msg = "Uploaded JSON is missing the 'seq_id' field."
         print(error_msg)
         return {
             "statusCode": 400,
@@ -176,10 +181,10 @@ def handler(event, context):
         }
     
     # Query the DynamoDB table using the file id.
-    print(f"Querying DynamoDB table: {MARIE_FIELD_TABLE_NAME}")
+    print(f"Querying DynamoDB table: {MARIE_SEQUENCE_TABLE_NAME}")
     table = dynamodb.Table(MARIE_FIELD_TABLE_NAME)
     try:
-        response = table.get_item(Key={'ID': file_id})
+        response = table.get_item(Key={'ID': field_id})
     except Exception as e:
         error_msg = f"Error querying DynamoDB: {str(e)}"
         print(error_msg)
@@ -190,7 +195,7 @@ def handler(event, context):
     
     item = response.get("Item")
     if not item:
-        error_msg = f"No item found in DynamoDB for ID: {file_id}"
+        error_msg = f"No item found in DynamoDB for ID: {field_id}"
         print(error_msg)
         return {
             "statusCode": 404,
@@ -206,11 +211,40 @@ def handler(event, context):
             "statusCode": 500,
             "body": json.dumps({"error": error_msg})
         }
+        
+        
+        
+        # Extract the field id from the uploaded JSON.
+    field_id = data.get("field_id")
+    
+    if not field_id:
+        error_msg = "Uploaded JSON is missing the 'id' field."
+        print(error_msg)
+        return {
+            "statusCode": 400,
+            "body": json.dumps({"error": error_msg})
+        }
+    
+    # Query the DynamoDB table using the file id.
+    print(f"Querying DynamoDB table: {MARIE_FIELD_TABLE_NAME}")
+    table = dynamodb.Table(MARIE_FIELD_TABLE_NAME)
+    try:
+        response = table.get_item(Key={'ID': field_id})
+    except Exception as e:
+        error_msg = f"Error querying DynamoDB: {str(e)}"
+        print(error_msg)
+        return {
+            "statusCode": 500,
+            "body": json.dumps({"error": error_msg})
+        }
+
+    
     
     # Build the output with full metadata and the file location.
     output = {
         "metadata": item,
-        "fileLocation": location
+        "fieldLocation": location
+        
     }
     
     print("Output:", json.dumps(output))

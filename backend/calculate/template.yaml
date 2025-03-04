@@ -38,6 +38,8 @@ Resources:
         Variables:
           JOB_TABLE: !ImportValue MarieFieldMetaDataTable
           FILE_BUCKET: !ImportValue MarieFieldBucket
+          MARIE_FIELD_TABLE_NAME: !ImportValue MarieFieldMetaDataTable
+          SEQUENCE_TABLE_NAME: !ImportValue SequenceMetaDataTable
 
   # # Lambda function that performs the calculation using the downloaded data.
   # RunJobFunction:
