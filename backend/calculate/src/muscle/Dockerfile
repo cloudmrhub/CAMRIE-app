@@ -36,25 +36,12 @@ ENV JULIA_DEPOT_PATH ${LAMBDA_TASK_ROOT}/packages
 
 ENV JULIA_CPU_TARGET="generic"
 
-# Install Julia packages
-RUN julia -e 'using Pkg;Pkg.Registry.add("General");'
-RUN julia -e 'using Pkg;Pkg.add(url="https://github.com/cloudmrhub/KomaNYU.jl");'
-
-RUN git config --global user.name "Your Name"
-RUN git config --global user.email "your.email@example.com"
-
-
-# RUN julia -e 'using Pkg; Pkg.Registry.add(Pkg.RegistrySpec(url="https://github.com/cloudmrhub/CloudRegistry.git"));'
-
-# RUN julia -e 'using Pkg; Pkg.add(url="https://github.com/cloudmrhub/KomaNYU.jl.git");'
-
-
-
-RUN julia -e 'using Pkg;Pkg.add(["KomaNYU","FileIO","JLD2"]);'
 
 ENV JULIA_DEPOT_PATH="/tmp/:${JULIA_DEPOT_PATH}"
 
-RUN julia -e "using Pkg; Pkg.instantiate();Pkg.precompile();"
+COPY install.jl ${LAMBDA_TASK_ROOT}
+
+RUN julia install.jl
 
 ENV LOAD_PATH="${LAMBDA_TASK_ROOT}:${LOAD_PATH}"
 

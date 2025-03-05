@@ -14,6 +14,16 @@ Parameters:
   FailedBucketPName:
     Type: String
     Description: "The fixed name for the Failed bucket"
+
+  SequenceMetaDataTableName:
+    Type: String
+    Description: "The name of the DynamoDB table that stores sequence metadata."
+    Default: "SequenceMetaData"
+  
+  MarieFieldMetaDataTableName:
+    Type: String
+    Description: "The name of the DynamoDB table that stores field metadata."
+    Default: "MarieFieldMetaData"
   
 
 Resources:
@@ -41,35 +51,42 @@ Resources:
           MARIE_FIELD_TABLE_NAME: !ImportValue MarieFieldMetaDataTable
           SEQUENCE_TABLE_NAME: !ImportValue SequenceMetaDataTable
 
-  # # Lambda function that performs the calculation using the downloaded data.
-  # RunJobFunction:
-  #   Type: AWS::Serverless::Function
-  #   Properties:
-  #     Description: >
-  #       This function runs the Mroptium computation (it is the muscle worker).
-  #       It should be triggered when an object is created in the jobs bucket.
-  #     PackageType: Image
-  #     Timeout: 900
-  #     MemorySize: 10240
-  #     ReservedConcurrentExecutions: 300
-  #     EphemeralStorage:
-  #       Size: 10240
-  #     Tags:
-  #       owner: "montie01"
-  #       mantainer: "montie01"
-  #       project: "mroptimum"
-  #       version: "v1"
-  #       team: "cloudmrhub"
-  #     Policies:
-  #         - S3ReadPolicy:
-  #           BucketName: !ImportValue MarieFieldBucket
-  #     Environment:
-  #       Variables:
-  #        DEBUG: "False"
-  #   Metadata:
-  #     Dockerfile: Dockerfile
-  #     DockerContext: src/muscle/
-  #     DockerTag: python3.10-v1
+  # Lambda function that performs the calculation using the downloaded data.
+  RunJobFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: >
+        This function runs the CAMRIE computation (it is the muscle worker).
+        It should be triggered when an object is created in the jobs bucket.
+      PackageType: Image
+      Timeout: 900
+      MemorySize: 10240
+      ReservedConcurrentExecutions: 100
+      EphemeralStorage:
+        Size: 10240
+      Tags:
+        owner: "montie01"
+        mantainer: "montie01"
+        project: "mroptimum"
+        version: "v1"
+        team: "cloudmrhub"
+      Policies:
+          - S3ReadPolicy:
+            BucketName: !ImportValue MarieFieldBucket
+      Environment:
+        Variables:
+         DEBUG: "False"
+    Metadata:
+      Dockerfile: Dockerfile
+      DockerContext: src/muscle/
+      DockerTag: python3.10-v1
+      # DockerConfig: 
+      #   Cmd: ["app.lambda_handler"]
+      #   Args: ["$JOB_ID"]
+      #   Image: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/mroptimum:${DockerTag}"
+      #   Secrets: 
+      #     - Name: JOB_ID
+      #       ValueFrom: !Ref DownloadDataFunction
 
 
   # # Step Functions state machine that orchestrates the workflow.

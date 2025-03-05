@@ -171,3 +171,4 @@ cython_debug/
 .pypirc
 backend/.aws-sam/build.toml
 backend/samconfig.toml
+.env.json

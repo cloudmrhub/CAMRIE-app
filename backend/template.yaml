@@ -52,8 +52,6 @@ Resources:
       Location: ark/template.yaml
 
 
-
-
   CAMRIECalculationApp:
     Type: AWS::Serverless::Application
     Properties:
@@ -61,6 +59,8 @@ Resources:
       Parameters:
         ResultsBucketPName: !GetAtt ArkApp.Outputs.ResultsBucket
         FailedBucketPName: !GetAtt ArkApp.Outputs.FailedBucket
+        SequenceMetaDataTable: !GetAtt SequencesApp.Outputs.SequenceMetaDataTable
+        MarieFieldMetaDataTable: !GetAtt FieldApp.Outputs.MarieFieldMetaDataTable
 
 # Outputs:
 #   # FieldMetaDataTable:
