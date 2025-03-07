@@ -39,11 +39,17 @@ Resources:
       Handler: task.handler
       Runtime: python3.10
       CodeUri: src/vertebra/
+      Tags:
+        owner: "montie01"
+        mantainer: "montie01"
+        project: "CAMRIE"
+        version: "v1"
+        team: "cloudmrhub"
       Policies:
         - DynamoDBReadPolicy:
             TableName: !ImportValue MarieFieldMetaDataTable
-        - S3ReadPolicy:
-            BucketName: !ImportValue MarieFieldBucket
+        - DynamoDBReadPolicy:
+            TableName: !ImportValue SequenceMetaDataTable
       Environment:
         Variables:
           JOB_TABLE: !ImportValue MarieFieldMetaDataTable
@@ -67,12 +73,19 @@ Resources:
       Tags:
         owner: "montie01"
         mantainer: "montie01"
-        project: "mroptimum"
+        project: "CAMRIE"
         version: "v1"
         team: "cloudmrhub"
       Policies:
           - S3ReadPolicy:
             BucketName: !ImportValue MarieFieldBucket
+          - S3WritePolicy:
+            BucketName: !ImportValue ResultsBucket
+          - S3WritePolicy:
+            BucketName: !ImportValue FailedBucket
+          - S3ReadPolicy:
+            BucketName: !ImportValue SequenceBucket
+          
       Environment:
         Variables:
          DEBUG: "False"
@@ -89,30 +102,30 @@ Resources:
       #       ValueFrom: !Ref DownloadDataFunction
 
 
-  # # Step Functions state machine that orchestrates the workflow.
-  # CalculationStateMachine:
-  #   Type: AWS::Serverless::StateMachine
-  #   Properties:
-  #     Definition:
-  #       StartAt: DownloadData
-  #       States:
-  #         DownloadData:
-  #           Type: Task
-  #           Resource: !GetAtt DownloadDataFunction.Arn
-  #           ResultPath: $.downloadResult
-  #           Next: Calculation
-  #         Calculation:
-  #           Type: Task
-  #           Resource: !GetAtt CalculationAppFunction.Arn
-  #           # Pass the output of the DownloadData function to the calculation function.
-  #           Parameters:
-  #             downloadResult.$: $.downloadResult
-  #           End: true
-  #     Policies:
-  #       - AWSLambdaInvokePolicy:
-  #           FunctionName: !Ref DownloadDataFunction
-  #       - AWSLambdaInvokePolicy:
-  #           FunctionName: !Ref CalculationAppFunction
+  # Step Functions state machine that orchestrates the workflow.
+  CalculationStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Definition:
+        StartAt: DownloadData
+        States:
+          DownloadData:
+            Type: Task
+            Resource: !GetAtt DownloadDataFunction.Arn
+            ResultPath: $.downloadResult
+            Next: Calculation
+          Calculation:
+            Type: Task
+            Resource: !GetAtt RunJobFunction.Arn
+            # Pass the output of the DownloadData function to the calculation function.
+            Parameters:
+              downloadResult.$: $.downloadResult
+            End: true
+      Policies:
+        - AWSLambdaInvokePolicy:
+            FunctionName: !Ref DownloadDataFunction
+        - AWSLambdaInvokePolicy:
+            FunctionName: !Ref RunJobFunction
 
 # Outputs:
   # DownloadDataFunction:

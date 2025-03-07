@@ -4,8 +4,8 @@ import os
 import shutil
 from pynico_eros_montin import pynico as pn
 import os
-
-
+from pyable_eros_montin import imaginable as ima
+import cmtools.cm2D as cm
 def sanitize_for_json(data):
     """Recursively sanitize data to make it JSON serializable."""
     if isinstance(data, dict):
@@ -29,8 +29,8 @@ def write_json_file(file_path, data):
     except Exception as e:
         print(f"Failed to write JSON data to file: {e}")
 
-mroptimum_result = os.getenv("ResultsBucketName", "mrorv2")
-mroptimum_failed = os.getenv("FailedBucketName", "mrofv2")
+result = os.getenv("ResultsBucketName", "camrie-results")
+failed = os.getenv("FailedBucketName", "camrie-failed")
 
 
 def s3FileTolocal(J, s3=None, pt="/tmp"):
@@ -52,96 +52,97 @@ def s3FileTolocal(J, s3=None, pt="/tmp"):
 import json
 import boto3
 import common as c
+from cmtools import cmaws
 # Initialize S3 client for re-use.
-s3 = boto3.client('s3')
-
-def handler(event=None, context=None):
-    """
-    Lambda handler for the CalculationAppFunction.
-    
-    Expects an input event like:
-    {
-      "downloadResult": {"metadata": {"Date": "2024-09-01", "File": "/data/PROJECTS/Architecture/lambdaKoma/cloudMR_birdcagecoil.zip", "Channels": "1", "Location": {"Region": "us-east-1", "Bucket": "camrie-app-fieldapp-1s07xzfaxwbo0-mariefieldbucket-m5dxtfkfwe54", "URL": "https://camrie-app-fieldapp-1s07xzfaxwbo0-mariefieldbucket-m5dxtfkfwe54.s3.us-east-1.amazonaws.com/cloudMR_birdcagecoil-ismrm25.zip", "Key": "cloudMR_birdcagecoil-ismrm25.zip"}, "Version": "0.2.3", "User": "gianni02", "Phantom": "duke", "Description": "Birdcage single Coil for 3T MRI scanner with Duke Phantom", "ID": "cloudMR_birdcagecoil-ismrm25.zip", "Coil": "birdcage", "B0": "3T"}, "fileLocation": {"Region": "us-east-1", "Bucket": "camrie-app-fieldapp-1s07xzfaxwbo0-mariefieldbucket-m5dxtfkfwe54", "URL": "https://camrie-app-fieldapp-1s07xzfaxwbo0-mariefieldbucket-m5dxtfkfwe54.s3.us-east-1.amazonaws.com/cloudMR_birdcagecoil-ismrm25.zip", "Key": "cloudMR_birdcagecoil-ismrm25.zip"}}
-      }
-    }
-    """
-    
+import numpy as np
+import os
+import shutil
+from pynico_eros_montin import pynico as pn
+def handler(event=None, context=None, s3=None):
+    # G=pn.GarbageCollector()
+    G=[]
+    if s3 == None:
+        s3 = boto3.client('s3')
+    LOG=pn.Log()
     # Retrieve the download result from the event.
     download_result = event.get("downloadResult")
+    
+    for l in download_result["log"]:
+        LOG.append(l)
+    
     if not download_result:
         return {
             "statusCode": 400,
             "body": json.dumps({"error": "Missing downloadResult in event"})
         }
     
-    metadata = download_result.get("metadata")
-    if not metadata:
-        return {
-            "statusCode": 400,
-            "body": json.dumps({"error": "Missing metadata in downloadResult"})
-        }
+    LOG.append("starting muscle calculation")
     
     # Extract file location details from metadata.
-    location = metadata.get("Location")
-    if not location:
-        return {
-            "statusCode": 400,
-            "body": json.dumps({"error": "Missing Location in metadata"})
-        }
+    fieldinfo=download_result["files"]["field"]
+    field=fieldinfo["Location"]
+    LOG.getWhatHappened()
     
-    bucket = location.get("Bucket")
-    key = location.get("Key")
-    if not bucket or not key:
-        return {
-            "statusCode": 400,
-            "body": json.dumps({"error": "Bucket or Key missing in Location"})
-        }
-    
-    
-    localfn = "/tmp/" + key.split("/")[-1]
-    print(f"Downloading file from S3: {bucket}/{key} to {localfn}")
-    # Download the file from S3.
-    try:
-        s3.download_file(Bucket=bucket, Key=key, Filename=localfn)
-        print(f"Downloaded file from S3: {bucket}/{key}")
-        
-    except Exception as e:
-        error_msg = f"Error downloading file from S3: {str(e)}"
-        print(error_msg)
-        return {
-            "statusCode": 500,
-            "body": json.dumps({"error": error_msg})
-        }
-    
-
-
-    FIELD=c.readMarieOutput(localfn)    
-
-    OUTDIR="/tmp/OUTDIR"
-    os.makedirs(OUTDIR,exist_ok=True)
+    LOG.append(f"Downloading file from S3: {field.get('Bucket')}/{field.get('Key')}")
+    localfield=cmaws.downloadFileFromS3(bucket_name=field["Bucket"], file_key=field["Key"],s3=s3)
+    # localfield = "/tmp/814c7807-68be-4ca9-9690-ca3292fd0a21.zip"
+    G.append(localfield)
+    LOG.append(f"Downloaded field file to {localfield}")
+    FIELD=c.readMarieOutput(localfield)    
+    OUTPUT="/tmp/a.zip"
+    OUTPUT=pn.Pathable(OUTPUT)
+    OUTPUT.appendPathRandom()
+    OUTPUT.changeFileNameRandom()
+    OUTPUT.ensureDirectoryExistence()
+    OUTDIR=OUTPUT.getPath()
+    OUTPUT=OUTPUT.getPosition()
+    G.append(OUTDIR)
     import SimpleITK as sitk        
     B0=FIELD["B0"]
     print(B0)
-    NT=20
+    NT=1
     GPU=False
-    A=pn.Pathable(OUTDIR+'/')
-    A.ensureDirectoryExistence()
     SENS_DIR=pn.Pathable(FIELD["b1m"][0]).getPath()
-    desired_spin_resolution = (2e-3,2e-3)
+    desired_spin_resolution = (2e-3, 2e-3, 2e-3)
 
     NC=sitk.ReadImage(FIELD["NC"])
-    print(sitk.GetArrayFromImage(NC))
-    GPU=False
-    A=pn.Pathable(OUTDIR+'/')
-    A.ensureDirectoryExistence()
-
-
-
+ 
+    
+    sequenceinfo=download_result["files"]["sequence"]
+    sequence=sequenceinfo["Location"]
+    LOG.append(f"Downloading file from S3: {sequence.get('Bucket')}/{sequence.get('Key')}")
+    localsequence=cmaws.downloadFileFromS3(bucket_name=sequence["Bucket"], file_key=sequence["Key"],s3=s3)
+    LOG.append(f"Downloaded sequence file to {localsequence}")
+    SL=download_result["job"]["image_plane"]["slice_location"]
+    
+    # data=c.simulate_2D_slice(SL, B0, FIELD["T1"],FIELD["T2"],FIELD["T2star"],FIELD["dW"],FIELD["PD"],desired_spin_resolution,"axial",localsequence,OUTDIR,SENS_DIR,GPU,NT,debug=True)
+    data=np.random.rand(100,100,1)+ np.random.rand(100,100,1)*1j
+    data=data.astype(np.complex128)
+    OUT=cmaws.cmrOutput(app="CAMRIE")
+    OUT.out["info"]={"calculation_time": {"time": 0.9518544673919678, "message": None}, "slices": 1}
+    K=ima.Imaginable()
+    K.setImageFromNumpy(data)
+    OUT.addAble(K,0,"Kspace")
+    
+    R=cm.cm2DReconRSS()
+    R.setSignalKSpace(data)
+    R.setNoiseCovariance(sitk.GetArrayFromImage(NC))
+    RECON=ima.numpyToImaginable(R.getOutput())
+    OUT.addAble(RECON,1,"RSS recon")
+    
+    R.__class__=cm.cm2DKellmanRSS
+    SNR=ima.numpyToImaginable(R.getOutput())
+    OUT.addAble(SNR,3,"SNR")
+    OUT.exportAndZipResultsToS3(result,s3=s3)
+      
+    
+    
+    
     return {
         "statusCode": 200,
         "body": json.dumps({
             "message": "Calculation completed successfully.",
-            "tempFile": localfn,
-            "metadata": metadata
+            "log": LOG.getWhatHappened(),
+
         })
     }

@@ -3,5 +3,3 @@ boto3
 requests
 jsonpickle
 
-
-

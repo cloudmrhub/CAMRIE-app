@@ -7,7 +7,7 @@ Pkg.Registry.add("General")
 Pkg.Registry.add(;url="https://github.com/cloudmrhub/CloudRegistry.git")
 
 # Add required packages
-Pkg.add(["KomaNYU", "FileIO", "JLD2"])
+Pkg.add(["KomaNYU", "FileIO", "JLD2", "NIfTI", "NPZ", "JSON", "Printf"])
 
-# Not required in 1.11
-# Pkg.precompile() 
+Pkg.instantiate()
+Pkg.precompile() 
