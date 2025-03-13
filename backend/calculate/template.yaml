@@ -5,33 +5,38 @@ Description: >
   The workflow first downloads file information and content (using metadata from a DynamoDB table)
   and then triggers a calculation function.
 
-
 Parameters:
   ResultsBucketPName:
     Type: String
     Description: "The fixed name for the Results bucket"
-  
   FailedBucketPName:
     Type: String
     Description: "The fixed name for the Failed bucket"
-
-  SequenceMetaDataTableName:
+  SequenceMetaDataTablePName:
     Type: String
     Description: "The name of the DynamoDB table that stores sequence metadata."
     Default: "SequenceMetaData"
-  
-  MarieFieldMetaDataTableName:
+  MarieFieldMetaDataTablePName:
     Type: String
     Description: "The name of the DynamoDB table that stores field metadata."
     Default: "MarieFieldMetaData"
-  
+  SequenceBucketPName:
+    Type: String
+    Description: "The name of the S3 bucket that stores sequence data."
+    Default: "sequence-data"
+  MarieFieldBucketPName:
+    Type: String
+    Description: "The name of the S3 bucket that stores field data."
+    Default: "field-data"
 
 Resources:
+  # S3 Bucket for uploads.
+  CAMRIEjobsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "camrie-jobs-${AWS::AccountId}-${AWS::Region}"
 
-  # Lambda function that downloads data:
-  # 1. Reads the input event (which contains {"id": "..."})
-  # 2. Queries the DynamoDB table for the metadata.
-  # 3. Retrieves the file location from S3 based on the metadata.
+  # Function to download data.
   DownloadDataFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -41,23 +46,21 @@ Resources:
       CodeUri: src/vertebra/
       Tags:
         owner: "montie01"
-        mantainer: "montie01"
+        maintainer: "montie01"
         project: "CAMRIE"
         version: "v1"
         team: "cloudmrhub"
       Policies:
         - DynamoDBReadPolicy:
-            TableName: !ImportValue MarieFieldMetaDataTable
+            TableName: !Ref MarieFieldMetaDataTablePName
         - DynamoDBReadPolicy:
-            TableName: !ImportValue SequenceMetaDataTable
+            TableName: !Ref SequenceMetaDataTablePName
       Environment:
         Variables:
-          JOB_TABLE: !ImportValue MarieFieldMetaDataTable
-          FILE_BUCKET: !ImportValue MarieFieldBucket
-          MARIE_FIELD_TABLE_NAME: !ImportValue MarieFieldMetaDataTable
-          SEQUENCE_TABLE_NAME: !ImportValue SequenceMetaDataTable
+          MARIE_FIELD_TABLE_NAME: !Ref MarieFieldMetaDataTablePName
+          SEQUENCE_TABLE_NAME: !Ref SequenceMetaDataTablePName
 
-  # Lambda function that performs the calculation using the downloaded data.
+  # Function that performs the calculation.
   RunJobFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -72,40 +75,74 @@ Resources:
         Size: 10240
       Tags:
         owner: "montie01"
-        mantainer: "montie01"
+        maintainer: "montie01"
         project: "CAMRIE"
         version: "v1"
         team: "cloudmrhub"
       Policies:
-          - S3ReadPolicy:
-            BucketName: !ImportValue MarieFieldBucket
-          - S3WritePolicy:
-            BucketName: !ImportValue ResultsBucket
-          - S3WritePolicy:
-            BucketName: !ImportValue FailedBucket
-          - S3ReadPolicy:
-            BucketName: !ImportValue SequenceBucket
-          
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+                - s3:ListBucket
+              Resource:
+                - !Sub "arn:aws:s3:::${MarieFieldBucketPName}"
+                - !Sub "arn:aws:s3:::${MarieFieldBucketPName}/*"
+            - Effect: Allow
+              Action:
+                - s3:PutObject
+              Resource:
+                - !Sub "arn:aws:s3:::${ResultsBucketPName}"
+                - !Sub "arn:aws:s3:::${ResultsBucketPName}/*"
+            - Effect: Allow
+              Action:
+                - s3:PutObject
+              Resource:
+                - !Sub "arn:aws:s3:::${FailedBucketPName}"
+                - !Sub "arn:aws:s3:::${FailedBucketPName}/*"
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+                - s3:ListBucket
+              Resource:
+                - !Sub "arn:aws:s3:::${SequenceBucketPName}"
+                - !Sub "arn:aws:s3:::${SequenceBucketPName}/*"
       Environment:
         Variables:
-         DEBUG: "False"
+          DEBUG: "False"
     Metadata:
       Dockerfile: Dockerfile
       DockerContext: src/muscle/
       DockerTag: python3.10-v1
-      # DockerConfig: 
-      #   Cmd: ["app.lambda_handler"]
-      #   Args: ["$JOB_ID"]
-      #   Image: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/mroptimum:${DockerTag}"
-      #   Secrets: 
-      #     - Name: JOB_ID
-      #       ValueFrom: !Ref DownloadDataFunction
 
+  # IAM Role for the state machine to invoke Lambda functions.
+  CalculationStateMachineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: StateMachineInvokeLambda
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource:
+                  - !GetAtt DownloadDataFunction.Arn
+                  - !GetAtt RunJobFunction.Arn
 
   # Step Functions state machine that orchestrates the workflow.
   CalculationStateMachine:
     Type: AWS::Serverless::StateMachine
     Properties:
+      Role: !GetAtt CalculationStateMachineRole.Arn
       Definition:
         StartAt: DownloadData
         States:
@@ -114,34 +151,85 @@ Resources:
             Resource: !GetAtt DownloadDataFunction.Arn
             ResultPath: $.downloadResult
             Next: Calculation
+            Catch:
+              - ErrorEquals: ["States.ALL"]
+                ResultPath: $.error
+                Next: FailureState
           Calculation:
             Type: Task
             Resource: !GetAtt RunJobFunction.Arn
-            # Pass the output of the DownloadData function to the calculation function.
             Parameters:
               downloadResult.$: $.downloadResult
             End: true
+            Catch:
+              - ErrorEquals: ["States.ALL"]
+                ResultPath: $.error
+                Next: FailureState
+          FailureState:
+            Type: Fail
+            Comment: "Workflow failed"
+
+  # IAM Role for EventBridge to invoke the state machine.
+  EventBridgeStepFunctionsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
       Policies:
-        - AWSLambdaInvokePolicy:
-            FunctionName: !Ref DownloadDataFunction
-        - AWSLambdaInvokePolicy:
-            FunctionName: !Ref RunJobFunction
+        - PolicyName: InvokeStateMachinePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: states:StartExecution
+                Resource: !GetAtt CalculationStateMachine.Arn
 
-# Outputs:
-  # DownloadDataFunction:
-  #   Description: "Function that downloads data"
-  #   Value: !Ref DownloadDataFunction
-  #   Export:
-  #     Name: DownloadDataFunction
-  # CalculationAppFunction:
-  #   Description: "Function that performs the calculation"
-  #   Value: !Ref RunJobFunction
-  #   Export:
-  #     Name: RunJobFunction
-  # CalculationStateMachine:
-  #   Description: "State machine that orchestrates the workflow"
-  #   Value: !Ref CalculationStateMachine
-  #   Export:
-  #     Name: CalculationStateMachine
+  # EventBridge Rule to trigger state machine on S3 upload.
+  S3UploadRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: "Trigger state machine on S3 upload with S3 event format"
+      EventPattern:
+        source:
+          - aws.s3
+        detail-type:
+          - "Object Created"
+        detail:
+          bucket:
+            name:
+              - !Ref CAMRIEjobsBucket
+      Targets:
+        - Arn: !GetAtt CalculationStateMachine.Arn
+          Id: "CalculationStateMachineTarget"
+          RoleArn: !GetAtt EventBridgeStepFunctionsRole.Arn
+          InputTransformer:
+            InputPathsMap:
+              bucket: "$.detail.bucket.name"
+              key: "$.detail.object.key"
+            InputTemplate: |
+              {
+                "Records": [
+                  {
+                    "s3": {
+                      "bucket": {
+                        "name": "<bucket>"
+                      },
+                      "object": {
+                        "key": "<key>"
+                      }
+                    }
+                  }
+                ]
+              }
 
-
+Outputs:
+  CAMRIEjobsBucket:
+    Description: "The S3 bucket for CAMRIE jobs"
+    Value: !Ref CAMRIEjobsBucket
+    Export:
+      Name: CAMRIEjobsBucket

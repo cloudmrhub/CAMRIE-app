@@ -59,8 +59,11 @@ Resources:
       Parameters:
         ResultsBucketPName: !GetAtt ArkApp.Outputs.ResultsBucket
         FailedBucketPName: !GetAtt ArkApp.Outputs.FailedBucket
-        SequenceMetaDataTable: !GetAtt SequencesApp.Outputs.SequenceMetaDataTable
-        MarieFieldMetaDataTable: !GetAtt FieldApp.Outputs.MarieFieldMetaDataTable
+        SequenceMetaDataTablePName: !GetAtt SequencesApp.Outputs.SequenceMetaDataTable
+        MarieFieldMetaDataTablePName: !GetAtt FieldApp.Outputs.MarieFieldMetaDataTable
+        SequenceBucketPName: !GetAtt SequencesApp.Outputs.SequenceBucket
+        MarieFieldBucketPName: !GetAtt FieldApp.Outputs.MarieFieldBucket
+
 
 # Outputs:
 #   # FieldMetaDataTable:
