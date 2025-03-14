@@ -55,6 +55,8 @@ Resources:
             TableName: !Ref MarieFieldMetaDataTablePName
         - DynamoDBReadPolicy:
             TableName: !Ref SequenceMetaDataTablePName
+        - S3ReadPolicy:
+            BucketName: !Ref CAMRIEjobsBucket
       Environment:
         Variables:
           MARIE_FIELD_TABLE_NAME: !Ref MarieFieldMetaDataTablePName
@@ -108,9 +110,21 @@ Resources:
               Resource:
                 - !Sub "arn:aws:s3:::${SequenceBucketPName}"
                 - !Sub "arn:aws:s3:::${SequenceBucketPName}/*"
+            - Effect: Allow
+              Action: 
+                - s3:GetObject
+                - s3:ListBucket
+              Resource: 
+                - !Sub "arn:aws:s3:::${CAMRIEjobsBucket}"
+                - !Sub "arn:aws:s3:::${CAMRIEjobsBucket}/*"
+
       Environment:
         Variables:
           DEBUG: "False"
+          RESULTS_BUCKET: !Ref ResultsBucketPName
+          FAILED_BUCKET: !Ref FailedBucketPName
+          SEQUENCE_BUCKET: !Ref SequenceBucketPName
+          MARIE_FIELD_BUCKET: !Ref MarieFieldBucketPName
     Metadata:
       Dockerfile: Dockerfile
       DockerContext: src/muscle/
@@ -226,6 +240,7 @@ Resources:
                   }
                 ]
               }
+
 
 Outputs:
   CAMRIEjobsBucket:

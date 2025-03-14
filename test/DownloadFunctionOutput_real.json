@@ -1,0 +1,122 @@
+{
+    "downloadResult": {
+      "files": {
+        "field": {
+          "Date": "2024-09-01",
+          "File": "/data/PROJECTS/Architecture/lambdaKoma/cloudMR_birdcagecoil.zip",
+          "Channels": "1",
+          "Location": {
+            "Region": "us-east-1",
+            "Bucket": "camrie-app-fieldapp-1s07xzfaxwbo0-mariefieldbucket-m5dxtfkfwe54",
+            "URL": "https://camrie-app-fieldapp-1s07xzfaxwbo0-mariefieldbucket-m5dxtfkfwe54.s3.us-east-1.amazonaws.com/cloudMR_birdcagecoil-ismrm25.zip",
+            "Key": "cloudMR_birdcagecoil-ismrm25.zip"
+          },
+          "Version": "0.2.3",
+          "User": "gianni02",
+          "Phantom": "duke",
+          "Description": "Birdcage single Coil for 3T MRI scanner with Duke Phantom",
+          "ID": "cloudMR_birdcagecoil-ismrm25.zip",
+          "Coil": "birdcage",
+          "B0": "3T"
+        },
+        "sequence": {
+          "Date": "2024-09-01",
+          "File": "/data/PROJECTS/Architecture/lambdaKoma/pipeline/sdl_pypulseq.seq",
+          "Location": {
+            "Region": "us-east-1",
+            "Bucket": "camrie-app-sequencesapp-uoovph67lmx-sequencebucket-d7ix1serybbf",
+            "URL": "https://camrie-app-sequencesapp-uoovph67lmx-sequencebucket-d7ix1serybbf.s3.us-east-1.amazonaws.com/ISMRM25-miniflash-01.seq",
+            "Key": "ISMRM25-miniflash-01.seq"
+          },
+          "Version": "0",
+          "User": "artiga02",
+          "Description": "ISMRM25",
+          "ID": "ISMRM25-miniflash-01.seq",
+          "Type": "pulseq"
+        }
+      },
+      "job": {
+        "version": "1.0",
+        "field_id": "cloudMR_birdcagecoil-ismrm25.zip",
+        "sequence_id": "ISMRM25-miniflash-01.seq",
+        "image_plane": {
+          "slice_thickness": 0.5,
+          "spacing_between_slices": 2,
+          "image_position_patient": [
+            1,
+            0,
+            0,
+            0,
+            1,
+            0
+          ],
+          "slice_location": 20,
+          "pixel_spacing": [
+            0.5,
+            0.5
+          ]
+        },
+        "task": {
+          "version": "v0",
+          "acquisition": 2,
+          "type": "SNR",
+          "id": 2,
+          "name": "PMR",
+          "options": {
+            "NR": 20,
+            "reconstructor": {
+              "type": "recon",
+              "name": "GRAPPA",
+              "id": 4,
+              "options": {
+                "noise": {},
+                "signal": {}
+              }
+            }
+          }
+        }
+      },
+      "log": [
+        {
+          "when": "14/03/2025, 17:41:15",
+          "what": "starting preprocessing",
+          "type": "start"
+        },
+        {
+          "when": "14/03/2025, 17:41:15",
+          "what": "read task json position",
+          "type": "procedure"
+        },
+        {
+          "when": "14/03/2025, 17:41:16",
+          "what": "downloaded task json",
+          "type": "procedure"
+        },
+        {
+          "when": "14/03/2025, 17:41:16",
+          "what": "extracted field id",
+          "type": "procedure"
+        },
+        {
+          "when": "14/03/2025, 17:41:16",
+          "what": "extracted sequence id",
+          "type": "procedure"
+        },
+        {
+          "when": "14/03/2025, 17:41:16",
+          "what": "queried field id",
+          "type": "procedure"
+        },
+        {
+          "when": "14/03/2025, 17:41:16",
+          "what": "queried sequence id",
+          "type": "procedure"
+        },
+        {
+          "when": "14/03/2025, 17:41:16",
+          "what": "finished preprocessing",
+          "type": "end"
+        }
+      ]
+    }
+  }

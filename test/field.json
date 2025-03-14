@@ -1,0 +1,31 @@
+{
+    "version": "1.0",
+    "field_id": "cloudMR_birdcagecoil-ismrm25.zip",
+    "sequence_id": "ISMRM25-miniflash-01.seq",
+    "image_plane":{
+        "slice_thickness": 0.5,
+        "spacing_between_slices": 2,
+        "image_position_patient": [1, 0, 0, 0, 1, 0],
+        "slice_location": 20,
+        "pixel_spacing": [0.5, 0.5]
+    },
+    "task": {
+        "version": "v0",
+        "acquisition": 2,
+        "type": "SNR",
+        "id": 2,
+        "name": "PMR",
+        "options": {
+            "NR": 20,
+            "reconstructor": {
+                "type": "recon",
+                "name": "GRAPPA",
+                "id": 4,
+                "options": {
+                    "noise": {},
+                    "signal": {}
+                }
+            }
+        }
+    }
+}

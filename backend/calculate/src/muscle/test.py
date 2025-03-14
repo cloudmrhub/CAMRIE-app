@@ -5,7 +5,7 @@ import boto3
 
 import pynico_eros_montin.pynico as pn
 # possible output from donload
-E=pn.Pathable("backend/calculate/src/muscle/output.json")
+E=pn.Pathable("test/DownloadFunctionOutput_real.json")
 E=E.readJson()
 import sys
 import cmtools.cmaws as cmaws

@@ -29,8 +29,8 @@ def write_json_file(file_path, data):
     except Exception as e:
         print(f"Failed to write JSON data to file: {e}")
 
-result = os.getenv("ResultsBucketName", "camrie-results")
-failed = os.getenv("FailedBucketName", "camrie-failed")
+result = os.getenv("RESULTS_BUCKET", "camrie-results")
+failed = os.getenv("FAILED_BUCKET", "camrie-failed")
 
 
 def s3FileTolocal(J, s3=None, pt="/tmp"):
