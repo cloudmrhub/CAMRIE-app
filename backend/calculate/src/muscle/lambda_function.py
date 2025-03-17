@@ -121,13 +121,13 @@ def handler(event=None, context=None, s3=None):
     OUT.out["info"]={"calculation_time": {"time": 0.9518544673919678, "message": None}, "slices": 1}
     K=ima.Imaginable()
     K.setImageFromNumpy(data)
-    OUT.addAble(K,0,"Kspace")
+    OUT.addAble(K,0,"KSpace")
     
     R=cm.cm2DReconRSS()
     R.setSignalKSpace(data)
     R.setNoiseCovariance(sitk.GetArrayFromImage(NC))
     RECON=ima.numpyToImaginable(R.getOutput())
-    OUT.addAble(RECON,1,"RSS recon")
+    OUT.addAble(RECON,1,"RSSRecon")
     
     R.__class__=cm.cm2DKellmanRSS
     SNR=ima.numpyToImaginable(R.getOutput())
