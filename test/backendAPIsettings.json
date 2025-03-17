@@ -2,6 +2,7 @@
     "version": "1.0",
     "field_id": "cloudMR_birdcagecoil-ismrm25.zip",
     "sequence_id": "ISMRM25-miniflash-01.seq",
+    "token":"xxxxxxxxxx",
     "image_plane":{
         "slice_thickness": 0.5,
         "spacing_between_slices": 2,

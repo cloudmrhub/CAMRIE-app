@@ -122,6 +122,9 @@ def handler(event, context=None):
     log.append({"when":get_time(),"what":"queried sequence id","type":"procedure"})
     log.append({"when":get_time(),"what":"finished preprocessing","type":"end"})
 
+    TOKEN = "xx"
+    PIPLELINE_ID = "xx"
+    
     # Build the output with nested structure
     output = {
         "files":{
@@ -129,7 +132,9 @@ def handler(event, context=None):
         "sequence": seq_result
         },        
         "job": data,
-        "log": log
+        "log": log,
+        "token": TOKEN,
+        "pipeline": PIPLELINE_ID
         
     }
     

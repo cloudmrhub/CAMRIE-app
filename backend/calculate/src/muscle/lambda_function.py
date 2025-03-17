@@ -77,6 +77,8 @@ def handler(event=None, context=None, s3=None):
     
     LOG.append("starting muscle calculation")
     
+    token = download_result["token"]
+    pipelineid = download_result["pipeline"]
     # Extract file location details from metadata.
     fieldinfo=download_result["files"]["field"]
     field=fieldinfo["Location"]
@@ -118,6 +120,8 @@ def handler(event=None, context=None, s3=None):
     # data=np.random.rand(100,100,1)+ np.random.rand(100,100,1)*1j
     data=data.astype(np.complex64)
     OUT=cmaws.cmrOutput(app="CAMRIE")
+    OUT.setToken(token)
+    OUT.setPipeline(pipelineid)
     OUT.out["info"]={"calculation_time": {"time": 0.9518544673919678, "message": None}, "slices": 1}
     K=ima.Imaginable()
     K.setImageFromNumpy(data)

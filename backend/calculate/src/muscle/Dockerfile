@@ -52,6 +52,6 @@ RUN mkdir -p /tmp/matplotlib && chmod -R 777 /tmp/matplotlib
 
 
 ENV LOAD_PATH="${LAMBDA_TASK_ROOT}:${LOAD_PATH}"
-
+# RUN julia -O3 --project=. test.jl
 # Set the default command (using your Lambda handler)
 CMD [ "lambda_function.handler" ]
