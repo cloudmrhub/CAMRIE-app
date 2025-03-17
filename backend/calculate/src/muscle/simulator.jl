@@ -4,7 +4,7 @@ using NPZ
 using JSON
 using NPZ
 using Printf
-using MKL_jll
+# using MKL_jll
 
 # B0, T1,T2, T2s, Δw, ρ,FOVx,FOVy,Δx, seq, directory, slicen, Sensitivities_directory, GPU, NT, 
 function read_nifti_slice(model, axis::Integer, ind::Integer)

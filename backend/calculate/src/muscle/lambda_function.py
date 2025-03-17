@@ -59,10 +59,9 @@ import os
 import shutil
 from pynico_eros_montin import pynico as pn
 def handler(event=None, context=None, s3=None):
-    # G=pn.GarbageCollector()
-    G=[]
+    G=pn.GarbageCollector()
     if s3 == None:
-        s3 = boto3.client('s3')
+        s3 = boto3.resource('s3')
     LOG=pn.Log()
     # Retrieve the download result from the event.
     download_result = event.get("downloadResult")
@@ -82,10 +81,10 @@ def handler(event=None, context=None, s3=None):
     fieldinfo=download_result["files"]["field"]
     field=fieldinfo["Location"]
     LOG.getWhatHappened()
-    
+    print(pn.getPackagesVersion(["numpy","SimpleITK","pynico_eros_montin","pyable_eros_montin","cmtools"]))
     LOG.append(f"Downloading file from S3: {field.get('Bucket')}/{field.get('Key')}")
     localfield=cmaws.downloadFileFromS3(bucket_name=field["Bucket"], file_key=field["Key"],s3=s3)
-    # localfield = "/tmp/814c7807-68be-4ca9-9690-ca3292fd0a21.zip"
+    
     G.append(localfield)
     LOG.append(f"Downloaded field file to {localfield}")
     FIELD=c.readMarieOutput(localfield)    
@@ -115,9 +114,9 @@ def handler(event=None, context=None, s3=None):
     LOG.append(f"Downloaded sequence file to {localsequence}")
     SL=download_result["job"]["image_plane"]["slice_location"]
     
-    # data=c.simulate_2D_slice(SL, B0, FIELD["T1"],FIELD["T2"],FIELD["T2star"],FIELD["dW"],FIELD["PD"],desired_spin_resolution,"axial",localsequence,OUTDIR,SENS_DIR,GPU,NT,debug=True)
-    data=np.random.rand(100,100,1)+ np.random.rand(100,100,1)*1j
-    data=data.astype(np.complex128)
+    data=c.simulate_2D_slice(SL, B0, FIELD["T1"],FIELD["T2"],FIELD["T2star"],FIELD["dW"],FIELD["PD"],desired_spin_resolution,"axial",localsequence,OUTDIR,SENS_DIR,GPU,NT,debug=True)
+    # data=np.random.rand(100,100,1)+ np.random.rand(100,100,1)*1j
+    data=data.astype(np.complex64)
     OUT=cmaws.cmrOutput(app="CAMRIE")
     OUT.out["info"]={"calculation_time": {"time": 0.9518544673919678, "message": None}, "slices": 1}
     K=ima.Imaginable()

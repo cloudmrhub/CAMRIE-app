@@ -2,8 +2,6 @@ using KomaNYU
 using NIfTI
 using NPZ
 using JSON
-using NPZ
 using Printf
-
-println("Modules loaded for precompilation.")
-
+using OpenSpecFun_jll
+println("Testing OpenSpecFun artifact: ", ispath(OpenSpecFun_jll.artifact_dir) ? "Found" : "Missing")
