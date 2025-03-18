@@ -64,6 +64,24 @@ Resources:
         SequenceBucketPName: !GetAtt SequencesApp.Outputs.SequenceBucket
         MarieFieldBucketPName: !GetAtt FieldApp.Outputs.MarieFieldBucket
 
+  # CAMRIEAPIApp:
+  #   Type: AWS::Serverless::Application
+  #   Properties:
+  #     Location: APIs/template.yaml
+  #     Parameters:
+  #       CortexHost: !Ref CortexHost
+  #       JobsBucketPName: !GetAtt CAMRIECalculationApp.Outputs.CAMRIEjobsBucket
+  #       StageName: Prod
+  
+  # CAMRIEUsagePlan:
+  #   Type: AWS::Serverless::Application
+  #   Properties:
+  #     Location: usageplan/template.yaml
+  #     Parameters:
+  #       StageName: Prod
+  #       ApiGatewayApi: !GetAtt CAMRIEAPIApp.Outputs.CAMRIEAPI
+
+
 
 # Outputs:
 #   # FieldMetaDataTable:

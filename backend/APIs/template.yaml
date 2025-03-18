@@ -1,0 +1,147 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+# Description: >
+#   CAMRIE apis
+
+Parameters:
+  CortexHost: 
+    Type: String
+    Description: cm cortex
+    Default: 'cancelit-env-1.eba-pmamcuv5.us-east-1.elasticbeanstalk.com'
+  JobsBucketPName:
+    Type: String
+    Description: jobs bucket
+    Default: 'mroj'
+  StageName:
+    Type: String
+    Description: Stage name for the API Gateway
+    Default: Prod
+    AllowedValues:
+      - Prod
+      - Dev
+      - Test
+
+Globals:
+  Function:
+    Timeout: 60
+    MemorySize: 512
+    Architectures:
+    - x86_64
+    Environment:
+      Variables:
+        JobBucketName: !Ref JobsBucketPName
+        Host: !Ref CortexHost
+        CloudMRApiUrl: !Sub https://${CortexHost}/api
+        PipelineScheduler: !Sub https://${CortexHost}/api/pipeline/request
+        PipelineCompleted: !Sub https://${CortexHost}/api/pipeline/completed
+        PipelineFailed: !Sub https://${CortexHost}/api/pipeline/failed
+        deleteDataAPI: !Sub https://${CortexHost}/api/data/delete 
+        updateDataAPI: !Sub https://${CortexHost}/api/data/update 
+        PipelineDeleteAPI: !Sub https://${CortexHost}/api/pipeline/delete
+
+Resources:
+
+  CAMRIEAPI:
+    Type: 'AWS::Serverless::Api'
+    Properties:
+      Tags:
+        owner: "cloudmrhub" # kerberos/cloudmrhub
+        maintainer: "montie01" #kerberos
+        project: "camrie-v1" 
+        team: "cloudmrhub"
+        status: "dev" # dev/test/prod
+        deletable: "check" # yes/maybe/check/no
+
+      StageName: !Ref StageName
+      CacheClusterEnabled: false
+      Cors:
+        AllowMethods: "'POST,GET,PUT,DELETE,OPTIONS'"
+        AllowOrigin: "'*'"
+        AllowHeaders: "'*'"
+
+
+      Auth:
+        AddDefaultAuthorizerToCorsPreflight: false
+        DefaultAuthorizer: UserAuthorizer
+        Authorizers:
+          UserAuthorizer:
+            FunctionArn: !GetAtt UserAuthorizerFunction.Arn
+            Identity:
+              ReauthorizeEvery: 0
+
+
+
+  UserAuthorizerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Tags:
+        owner: "montie01"
+        maintainer: "montie01"
+        project: "CAMRIE"
+        version: "v2"
+        team: "cloudmrhub"
+      PackageType: Zip
+      CodeUri: user-authorizer-python/  # Change this to point to your Python code directory
+      Handler: authorizer.lambda_handler  # Assuming your python file is named 'your_python_filename.py'
+      Runtime: python3.10  # Adjust based on your desired Python runtime version
+
+
+  # This is the function which queues (or schedules) jobs on the pipeline.
+  #
+  # It is triggered by POST /pipeline request and will write the job to the
+  # cloudmrhub-jobs bucket.
+  # The request is authorized using the Authorization header which expects
+  # a Bearer JWT token. This should get validated with the user db.
+  
+
+  QueueJobFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: >
+        This function creates an object defining the job configuration (<pipeline-id>.json) 
+        in the jobs bucket. It is triggered by POST /pipeline.
+        
+      Tags:
+        owner: "montie01"
+        maintainer: "montie01"
+        project: "CAMRIE"
+        version: "v2"
+        team: "cloudmrhub"
+      PackageType: Zip
+      CodeUri: queue-job-python/
+      Handler: app.lambda_handler
+      Runtime: python3.10
+      Policies:
+        - S3FullAccessPolicy:
+            BucketName: !Ref JobsBucket
+
+      Events:
+        PostJobApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref CAMRIEAPI
+            Path: /pipeline
+            Method: post
+            Auth:
+              Authorizer: UserAuthorizer
+              ApiKeyRequired: true
+              
+
+
+Outputs:
+  QueueJobApi:
+    Description: API Gateway endpoint URL for Prod stage for Queue function
+    Value: !Sub "https://${CAMRIEAPI}.execute-api.${AWS::Region}.amazonaws.com/${StageName}/pipeline"
+    Export:
+      Name: !Sub "${AWS::StackName}-QueueJobApi"
+    
+  CAMRIEApi:
+    Description: "HTTP API endpoint files for update filename in database"
+    Value: !Sub "https://${CAMRIEAPI}.execute-api.${AWS::Region}.amazonaws.com/${StageName}"
+  CAMRIEApiId:
+    Description: "API ID"
+    Value: !Ref CAMRIEAPI
+    Export:
+      Name: !Sub "${AWS::StackName}-ApiId"
+
+  

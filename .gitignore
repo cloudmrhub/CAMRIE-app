@@ -170,6 +170,5 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 backend/.aws-sam/build.toml
-backend/samconfig.toml
 .env.json
 key.json

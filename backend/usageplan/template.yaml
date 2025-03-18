@@ -1,0 +1,54 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Nested template to configure a usage plan for CAMRIapi with a monthly quota of 200 requests
+
+Parameters:
+  StageName:
+    Type: String
+    Default: Prod
+    Description: The API Gateway stage to associate with the usage plan.
+  ApiGatewayApi:
+    Type: String
+    Description: The ID of the API Gateway REST API for CAMRIapi.
+
+Resources:
+  CAMRIapiUsagePlan:
+    Type: AWS::ApiGateway::UsagePlan
+    Properties:
+      ApiStages:
+        - ApiId: !Ref ApiGatewayApi
+          Stage: !Ref StageName
+      UsagePlanName: CAMRIapi-UsagePlan
+      Quota:
+        Limit: 200
+        Period: MONTH
+      Throttle:
+        BurstLimit: 200
+        RateLimit: 6.67
+
+  CAMRIapiApiKey:
+    Type: AWS::ApiGateway::ApiKey
+    Properties:
+      Name: CAMRIapi-ApiKey
+      Description: API Key for accessing CAMRIapi endpoints.
+      Enabled: true
+      GenerateDistinctId: true
+
+  CAMRIapiUsagePlanKey:
+    Type: AWS::ApiGateway::UsagePlanKey
+    Properties:
+      KeyId: !Ref CAMRIapiApiKey
+      KeyType: API_KEY
+      UsagePlanId: !Ref CAMRIapiUsagePlan
+
+Outputs:
+  ApiKey:
+    Description: "API Key for CAMRIapi"
+    Value: !Ref CAMRIapiApiKey
+  UsagePlanId:
+    Description: "Usage Plan ID for CAMRIapi"
+    Value: !Ref CAMRIapiUsagePlan
+  UsagePlanKeyId:
+    Description: "Usage Plan Key ID for CAMRIapi"
+    Value: !Ref CAMRIapiUsagePlanKey
