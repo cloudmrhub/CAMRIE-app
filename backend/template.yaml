@@ -79,7 +79,7 @@ Resources:
   #     Location: usageplan/template.yaml
   #     Parameters:
   #       StageName: Prod
-  #       ApiGatewayApi: !GetAtt CAMRIEAPIApp.Outputs.CAMRIEAPI
+  #       ApiGatewayApi: !GetAtt CAMRIEAPIApp.Outputs.CAMRIEApi
 
 
 

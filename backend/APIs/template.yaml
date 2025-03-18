@@ -113,7 +113,7 @@ Resources:
       Runtime: python3.10
       Policies:
         - S3FullAccessPolicy:
-            BucketName: !Ref JobsBucket
+            BucketName: !Ref JobsBucketPName
 
       Events:
         PostJobApiEvent:
@@ -124,7 +124,7 @@ Resources:
             Method: post
             Auth:
               Authorizer: UserAuthorizer
-              ApiKeyRequired: true
+              # ApiKeyRequired: true
               
 
 

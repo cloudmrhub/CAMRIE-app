@@ -1,54 +1,61 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: >
-  Nested template to configure a usage plan for CAMRIapi with a monthly quota of 200 requests
+Description: Usage Plan for CAMRIE API /pipeline endpoint
 
 Parameters:
-  StageName:
-    Type: String
-    Default: Prod
-    Description: The API Gateway stage to associate with the usage plan.
   ApiGatewayApi:
     Type: String
-    Description: The ID of the API Gateway REST API for CAMRIapi.
+    Description: The API Gateway ID from the CAMRIEAPI resource
+  StageName:
+    Type: String
+    Description: The stage name for the API Gateway (e.g., Prod)
 
 Resources:
-  CAMRIapiUsagePlan:
+  PipelineUsagePlan:
     Type: AWS::ApiGateway::UsagePlan
     Properties:
       ApiStages:
         - ApiId: !Ref ApiGatewayApi
           Stage: !Ref StageName
-      UsagePlanName: CAMRIapi-UsagePlan
+          # Throttle settings as a map for the specific method
+          Throttle:
+            "/pipeline/POST":
+              RateLimit: 10
+              BurstLimit: 20
+      Description: Usage plan for CAMRIE /pipeline endpoint
       Quota:
-        Limit: 200
-        Period: MONTH
-      Throttle:
-        BurstLimit: 200
-        RateLimit: 6.67
+        Limit: 1000
+        Offset: 0  # Explicitly set to avoid ambiguity
+        Period: DAY
+      UsagePlanName: !Sub "CAMRIE-Pipeline-Usage-Plan-${AWS::StackName}"  # Ensure uniqueness
+      Tags:
+        project: "camrie-v1"
+        team: "cloudmrhub"
 
-  CAMRIapiApiKey:
+  PipelineApiKey:
     Type: AWS::ApiGateway::ApiKey
     Properties:
-      Name: CAMRIapi-ApiKey
-      Description: API Key for accessing CAMRIapi endpoints.
       Enabled: true
-      GenerateDistinctId: true
+      Name: !Sub "CAMRIE-Pipeline-Key-${AWS::StackName}"  # Ensure uniqueness
+      Description: API Key for CAMRIE /pipeline usage plan
+      StageKeys:  # Explicitly associate with the API and stage
+        - RestApiId: !Ref ApiGatewayApi
+          StageName: !Ref StageName
+      Tags:
+        project: "camrie-v1"
+        team: "cloudmrhub"
 
-  CAMRIapiUsagePlanKey:
+  UsagePlanKey:
     Type: AWS::ApiGateway::UsagePlanKey
     Properties:
-      KeyId: !Ref CAMRIapiApiKey
+      KeyId: !Ref PipelineApiKey
       KeyType: API_KEY
-      UsagePlanId: !Ref CAMRIapiUsagePlan
+      UsagePlanId: !Ref PipelineUsagePlan
 
 Outputs:
-  ApiKey:
-    Description: "API Key for CAMRIapi"
-    Value: !Ref CAMRIapiApiKey
+  PipelineApiKeyValue:
+    Description: The value of the API key for the /pipeline usage plan
+    Value: !Ref PipelineApiKey
   UsagePlanId:
-    Description: "Usage Plan ID for CAMRIapi"
-    Value: !Ref CAMRIapiUsagePlan
-  UsagePlanKeyId:
-    Description: "Usage Plan Key ID for CAMRIapi"
-    Value: !Ref CAMRIapiUsagePlanKey
+    Description: The ID of the usage plan
+    Value: !Ref PipelineUsagePlan

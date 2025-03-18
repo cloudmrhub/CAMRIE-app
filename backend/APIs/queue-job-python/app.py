@@ -3,6 +3,8 @@ import requests
 import boto3
 import os
 import os
+import certifi
+
 os.environ['CURL_CA_BUNDLE'] = ''
 
 def getHeadersForRequests():
@@ -21,20 +23,22 @@ def lambda_handler(event, context):
     authorization_header = headers['Authorization']
     # Get the application and pipeline names.
     
+    if 'output' not in body:
+        body['output'] = None
+    if 'task' not in body:
+        body["task"] = {}
     application = 'CAMRIE'
     alias = body['alias']
     task = body['task']
     output = body['output']
     pipelineAPI = os.environ.get("PipelineScheduler")
-    
+    print(pipelineAPI)
     data2={"application":application,"alias":alias}
-    r2=requests.post(pipelineAPI, data=json.dumps(data2), headers=getHeadersForRequestsWithToken(authorization_header))
+    r2 = requests.post(pipelineAPI, data=json.dumps(data2), headers=getHeadersForRequestsWithToken(authorization_header), verify=False)
+    # r2=requests.post(pipelineAPI, data=json.dumps(data2), headers=getHeadersForRequestsWithToken(authorization_header))
     R=r2.json()
-    
-    if ((task["name"].lower()=='pmr') or (task["name"].lower()=='mr')):  
-        bucket = os.environ.get("LongJobBucketName")
-    else:
-        bucket = os.environ.get("JobBucketName")
+
+    bucket = os.environ.get("JobBucketName")
     print(bucket)
     pipeline_id = R["pipeline"]
 

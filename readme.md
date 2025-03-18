@@ -18,15 +18,21 @@ project-root/
 ├── ark/
 │   └── template.yaml
 ├── calculate/
-│   ├── template.yaml  # The nested template you shared earlier
+│   ├── template.yaml  
 │   ├── src/
 │   │   ├── muscle/
 │   │   │   └── Dockerfile  # For RunJobFunction
 │   │   └── vertebra/
 │   │       └── task.py     # For DownloadDataFunction
+├── APIs/
+│   ├── template.yaml  
+│   ├── queue-job-python/   # task lambda
+│   ├── user-authorizer-python/ #authorizer
 └── template.yaml  # The parent template
 
 
-sam build --profile nyu
-sam deploy --stack-name camrie-app  --profile nyu  --capabilities CAPABILITY_IAM CAPABILITY_AUTO_EXPAND
-sam deploy --stack-name camrie-app --profile nyu --capabilities CAPABILITY_IAM CAPABILITY_AUTO_EXPAND --resolve-image-repos
+
+```bash
+cd backend
+sam build --use-container --profile nyu && sam deploy --stack-name camrie-app --profile nyu --capabilities CAPABILITY_IAM CAPABILITY_AUTO_EXPAND --resolve-image-repos
+```
