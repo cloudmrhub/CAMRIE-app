@@ -52,36 +52,7 @@ def handler(event, context=None):
     log=[]
     log.append({"when":get_time(),"what":"starting preprocessing","type":"start"})
     # Extract bucket and key from the S3 event.
-    try:
-        record = event['Records'][0]
-        bucket = record['s3']['bucket']['name']
-        key = record['s3']['object']['key']
-    except KeyError as e:
-        error_msg = f"Error parsing S3 event: {str(e)}"
-        print(error_msg)
-        return {
-            "statusCode": 400,
-            "body": json.dumps({"error": error_msg})
-        }
-    
-  
-    log.append({"when":get_time(),"what":"read task json position","type":"procedure"})    
-    print(f"Reading JSON file from S3: s3://{bucket}/{key}")
-    try:
-        s3_response = s3.get_object(Bucket=bucket, Key=key)
-        content = s3_response['Body'].read().decode('utf-8')
-        data = json.loads(content)
-        log.append({"when":get_time(),"what":"downloaded task json","type":"procedure"})
-    except Exception as e:
-        error_msg = f"Error reading or parsing S3 object: {str(e)}"
-        print(error_msg)
-        log.append({"when":get_time(),"what":"downloaded task json","type":"ERROR","error":error_msg})
-        return {
-            "statusCode": 500,
-            "body": json.dumps(log)
-        }
-    print("JSON data:", json.dumps(data))
-    # Extract the file id from the uploaded JSON.
+    data = event.get("task")
     field_id = data.get("field_id")
     
     log.append({"when":get_time(),"what":"extracted field id","type":"procedure"})
@@ -122,8 +93,8 @@ def handler(event, context=None):
     log.append({"when":get_time(),"what":"queried sequence id","type":"procedure"})
     log.append({"when":get_time(),"what":"finished preprocessing","type":"end"})
 
-    TOKEN = "xx"
-    PIPLELINE_ID = "xx"
+    TOKEN = event.get("token")
+    PIPELINE_ID = event.get("pipeline")
     
     # Build the output with nested structure
     output = {
@@ -134,7 +105,7 @@ def handler(event, context=None):
         "job": data,
         "log": log,
         "token": TOKEN,
-        "pipeline": PIPLELINE_ID
+        "pipeline": PIPELINE_ID
         
     }
     
@@ -142,3 +113,8 @@ def handler(event, context=None):
     print("Output:", json.dumps(output))
     return output
 
+
+if __name__ == "__main__":
+    
+    event=json.load(open("backend/calculate/src/vertebra/test/event.json"))
+    handler(event)

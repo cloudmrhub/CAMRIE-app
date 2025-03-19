@@ -1,38 +1,50 @@
 {
-  "Records": [
-    {
-      "eventVersion": "2.1",
-      "eventSource": "aws:s3",
-      "awsRegion": "us-east-1",
-      "eventTime": "2025-01-24T22:38:06.278Z",
-      "eventName": "ObjectCreated:Put",
-      "userIdentity": {
-        "principalId": "AWS:AROAW2QT4RWM5VD33KNK7:MROBackstackv2-QueueJobFunction-A4grJ5sSUb7z"
-      },
-      "requestParameters": {
-        "sourceIPAddress": "3.231.212.6"
-      },
-      "responseElements": {
-        "x-amz-request-id": "ZC6MEHV6YQKVKXET",
-        "x-amz-id-2": "lB0GvKzIoKxw4glPhom2w3yKz9gn0sPKBwV93nbhHjQabVSmOLQQEoTDVA/NhnjgHe3zqi8qz7h8tpJQMazZ8cqc8PclFshh0Jl4s+mmZ9g="
-      },
-      "s3": {
-        "s3SchemaVersion": "1.0",
-        "configurationId": "MzgzNDJlNDItYmQ2My00YzY2LWEyOTEtZjUxNzE2MDQ1MDRj",
-        "bucket": {
-          "name": "camrie-app-fieldapp-1s07xzfaxwbo0-mariefieldbucket-m5dxtfkfwe54",
-          "ownerIdentity": {
-            "principalId": "A3MJ0EXDKKHTKU"
-          },
-          "arn": "arn:aws:s3:::camrie-app-fieldapp-1s07xzfaxwbo0-mariefieldbucket-m5dxtfkfwe54"
-        },
-        "object": {
-          "key": "field.json",
-          "size": 1623,
-          "eTag": "d83b9821bc287c1aef7097d3fba5536b",
-          "sequencer": "006794164E3F27C504"
+  "task": {
+    "version": "1.0",
+    "field_id": "cloudMR_birdcagecoil-ismrm25.zip",
+    "sequence_id": "ISMRM25-miniflash-01.seq",
+    "image_plane": {
+      "slice_thickness": 0.5,
+      "spacing_between_slices": 2,
+      "image_position_patient": [
+        1,
+        0,
+        0,
+        0,
+        1,
+        0
+      ],
+      "slice_location": 20,
+      "pixel_spacing": [
+        0.5,
+        0.5
+      ]
+    },
+    "reconstructor": {
+      "task": {
+        "version": "v0",
+        "acquisition": 2,
+        "type": "SNR",
+        "id": 2,
+        "name": "PMR",
+        "options": {
+          "NR": 20,
+          "reconstructor": {
+            "type": "recon",
+            "name": "GRAPPA",
+            "id": 4,
+            "options": {
+              "noise": {},
+              "signal": {}
+            }
+          }
         }
       }
     }
-  ]
+  },
+  "output": "",
+  "application": "CAMRIE",
+  "alias": "aaa",
+  "pipeline": "9a9bb378-361b-337f-8892-86503dcca5bc",
+  "token": "Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJodHRwOlwvXC9jYW5jZWxpdC1lbnYtMS5lYmEtcG1hbWN1djUudXMtZWFzdC0xLmVsYXN0aWNiZWFuc3RhbGsuY29tXC9hcGlcL2F1dGhcL2xvZ2luIiwiaWF0IjoxNzQyMzk0MjIyLCJleHAiOjE3NDI0ODA2MjIsIm5iZiI6MTc0MjM5NDIyMiwianRpIjoiOGUzM05NN3pSZktlbzl2RiIsInN1YiI6OTk5OSwicHJ2IjoiODdlMGFmMWVmOWZkMTU4MTJmZGVjOTcxNTNhMTRlMGIwNDc1NDZhYSJ9.GLLN2B62NhQMzgpTWSV2okRxt41y35cLO7n1Sa_BuY8"
 }

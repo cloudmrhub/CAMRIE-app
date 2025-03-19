@@ -72,6 +72,7 @@ Resources:
         CortexHost: !Ref CortexHost
         JobsBucketPName: !GetAtt CAMRIECalculationApp.Outputs.CAMRIEjobsBucket
         StageName: Prod
+        CalculationStateMachineARN: !GetAtt CAMRIECalculationApp.Outputs.CalculationStateMachineARN
   
   # CAMRIEUsagePlan:
   #   Type: AWS::Serverless::Application

@@ -20,6 +20,10 @@ Parameters:
       - Prod
       - Dev
       - Test
+  CalculationStateMachineARN:
+    Type: String
+    Description: Step function ARN
+    Default: 'arn:aws:states:us-east-1:123456789012:stateMachine:CAMRIEStepFunction'
 
 Globals:
   Function:
@@ -38,6 +42,7 @@ Globals:
         deleteDataAPI: !Sub https://${CortexHost}/api/data/delete 
         updateDataAPI: !Sub https://${CortexHost}/api/data/update 
         PipelineDeleteAPI: !Sub https://${CortexHost}/api/pipeline/delete
+        CalculationStateMachineARN: !Ref CalculationStateMachineARN
 
 Resources:
 
@@ -112,8 +117,16 @@ Resources:
       Handler: app.lambda_handler
       Runtime: python3.10
       Policies:
-        - S3FullAccessPolicy:
-            BucketName: !Ref JobsBucketPName
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - states:StartExecution
+              Resource: !Ref CalculationStateMachineARN
+            - Effect: Allow
+              Action:
+                - s3:PutObject
+              Resource: !Sub "arn:aws:s3:::${JobsBucketPName}/*"
 
       Events:
         PostJobApiEvent:

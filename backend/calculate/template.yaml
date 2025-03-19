@@ -183,63 +183,6 @@ Resources:
             Type: Fail
             Comment: "Workflow failed"
 
-  # IAM Role for EventBridge to invoke the state machine.
-  EventBridgeStepFunctionsRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: events.amazonaws.com
-            Action: sts:AssumeRole
-      Policies:
-        - PolicyName: InvokeStateMachinePolicy
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action: states:StartExecution
-                Resource: !GetAtt CalculationStateMachine.Arn
-
-  # EventBridge Rule to trigger state machine on S3 upload.
-  S3UploadRule:
-    Type: AWS::Events::Rule
-    Properties:
-      Description: "Trigger state machine on S3 upload with S3 event format"
-      EventPattern:
-        source:
-          - aws.s3
-        detail-type:
-          - "ObjectCreated:*"
-        detail:
-          bucket:
-            name:
-              - !Ref CAMRIEjobsBucket
-      Targets:
-        - Arn: !GetAtt CalculationStateMachine.Arn
-          Id: "CalculationStateMachineTarget"
-          RoleArn: !GetAtt EventBridgeStepFunctionsRole.Arn
-          InputTransformer:
-            InputPathsMap:
-              bucket: "$.detail.bucket.name"
-              key: "$.detail.object.key"
-            InputTemplate: |
-              {
-                "Records": [
-                  {
-                    "s3": {
-                      "bucket": {
-                        "name": "<bucket>"
-                      },
-                      "object": {
-                        "key": "<key>"
-                      }
-                    }
-                  }
-                ]
-              }
 
 
 Outputs:
@@ -248,3 +191,8 @@ Outputs:
     Value: !Ref CAMRIEjobsBucket
     Export:
       Name: CAMRIEjobsBucket
+  CalculationStateMachineARN:
+    Description: "The ARN of the Calculation State Machine"
+    Value: !GetAtt CalculationStateMachine.Arn
+    Export:
+      Name: CalculationStateMachineARN
