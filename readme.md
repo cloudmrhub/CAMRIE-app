@@ -28,6 +28,10 @@ project-root/
 │   ├── template.yaml  
 │   ├── queue-job-python/   # task lambda
 │   ├── user-authorizer-python/ #authorizer
+├── frontend/
+│   ├── template.yaml  (all the apis to upload, retrieve data and results from the backend to the frontend)
+├── amplify/
+│   ├── template.yaml   (spin the frontend)
 └── template.yaml  # The parent template
 
 

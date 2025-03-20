@@ -1,0 +1,79 @@
+Parameters:
+  GithubToken:
+    Type: String
+    Description: Access token to GitHub
+    Default: xxxx
+  CloudmrServer:
+    Type: String
+    Description: "CLOUDMR_SERVER"
+  CAMRIEServer:
+    Type: String
+    Description: "MRO_SERVER"
+  QueueServer:
+    Type: String
+    Description: "QUEUE_SERVER"
+  ProfileServer:
+    Type: String
+    Description: "PROFILE_SERVER"
+  ApiUrl:
+    Type: String
+    Description: "API_URL"
+    Default: "XXXXXXXXXXXXXXXXXXXXXXX"
+  ApiToken:
+    Type: String
+    Description: "API_TOKEN"
+
+Resources:
+  CAMRIEFrontend:
+    Type: AWS::Amplify::App
+    Properties:
+      AccessToken: !Ref GithubToken
+      Name: !Sub "CAMRIE ${AWS::StackName}"
+      Platform: "WEB"
+      Repository: "https://github.com/cloudmrhub/camrie-webgui"
+      Tags:
+        - Key: owner
+          Value: cloudmrhub
+        - Key: maintainer
+          Value: montie01
+        - Key: project
+          Value: camrie-v2
+        - Key: team
+          Value: cloudmrhub
+        - Key: status
+          Value: prod
+
+  MainBranch:
+    Type: AWS::Amplify::Branch
+    Properties:
+      AppId: !GetAtt CAMRIEFrontend.AppId
+      BranchName: "main"
+      EnableAutoBuild: true
+      BuildSpec: !Sub |
+        version: 1
+        frontend:
+          phases:
+            preBuild:
+              commands:
+                - yarn install
+            build:
+              commands:
+                - node setup/generate-env.js 
+                - cat src/env.ts
+                - yarn build
+          artifacts:
+            baseDirectory: build
+            files:
+              - '**/*'
+          cache:
+            paths:
+              - node_modules/**/*
+        env:
+          variables:
+            CLOUDMR_SERVER: ${CloudmrServer}
+            MRO_SERVER: ${MroServer}
+            PROFILE_SERVER: ${ProfileServer}
+            API_URL: ${ApiUrl}
+            API_TOKEN: ${ApiToken}
+      Framework: "WEB"
+      Stage: "PRODUCTION"
