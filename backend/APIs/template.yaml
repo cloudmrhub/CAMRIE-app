@@ -156,5 +156,9 @@ Outputs:
     Value: !Ref CAMRIEAPI
     Export:
       Name: !Sub "${AWS::StackName}-ApiId"
+  UserAuthorizerFunctionARN:
+    Description: "User Authorizer Function ARN"
+    Value: !GetAtt UserAuthorizerFunction.Arn
+
 
   

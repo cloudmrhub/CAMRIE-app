@@ -74,6 +74,20 @@ Resources:
         StageName: Prod
         CalculationStateMachineARN: !GetAtt CAMRIECalculationApp.Outputs.CalculationStateMachineARN
   
+  CAMRIEfrontendApp:
+    Type: AWS::Serverless::Application
+    Properties:
+      Location: frontend/template.yaml
+      Parameters:
+        CortexHost: !Ref CortexHost
+        ResultsBucketPName: !GetAtt ArkApp.Outputs.ResultsBucket
+        FailedBucketPName: !GetAtt ArkApp.Outputs.FailedBucket
+        StageName: Prod
+        UserAuthorizerFunctionARN: !GetAtt CAMRIEAPIApp.Outputs.UserAuthorizerFunctionARN
+
+
+
+
   # CAMRIEUsagePlan:
   #   Type: AWS::Serverless::Application
   #   Properties:

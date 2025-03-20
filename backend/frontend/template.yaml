@@ -1,0 +1,489 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+# Description: >
+#   CAMRIE frontend
+
+Parameters:
+  CortexHost: 
+    Type: String
+    Description: cm cortex
+    Default: 'cancelit-env-1.eba-pmamcuv5.us-east-1.elasticbeanstalk.com'
+  ResultsBucketPName:
+    Type: String
+    Description: results bucket
+    Default: 'mror'
+  FailedBucketPName:
+    Type: String
+    Description: failed bucket
+    Default: 'mrof'
+  StageName:
+    Type: String
+    Description: Stage name for the API Gateway
+    Default: Prod
+    AllowedValues:
+      - Prod
+      - Dev
+      - Test
+  UserAuthorizerFunctionARN:
+    Type: String
+    Description: The ARN of the Lambda function to use as the authorizer for the API Gateway
+    Default: 'arn:aws:lambda:us-east-1:469266894233:function:camrie-app-CAMRIEAPIApp-TB5-UserAuthorizerFunction-JhtqqigUYnL9'
+
+Globals:
+  Function:
+    Timeout: 60
+    MemorySize: 512
+    Architectures:
+    - x86_64
+    Environment:
+      Variables:
+        Application: CAMRIE
+        ResultsBucketName: !Ref ResultsBucketPName
+        FailedBucketName: !Ref FailedBucketPName
+        Host: !Ref CortexHost
+        CloudMRApiUrl: !Sub https://${CortexHost}/api
+        PipelineScheduler: !Sub https://${CortexHost}/api/pipeline/request
+        PipelineCompleted: !Sub https://${CortexHost}/api/pipeline/completed
+        PipelineFailed: !Sub https://${CortexHost}/api/pipeline/failed
+        deleteDataAPI: !Sub https://${CortexHost}/api/data/delete 
+        updateDataAPI: !Sub https://${CortexHost}/api/data/update 
+        PipelineDeleteAPI: !Sub https://${CortexHost}/api/pipeline/delete
+Resources:
+  
+  CAMRIEFrontendAPI:
+    Type: 'AWS::Serverless::Api'
+    Properties:
+      Tags:
+        owner: "cloudmrhub" # kerberos/cloudmrhub
+        maintainer: "montie01" #kerberos
+        project: "CAMRIE"
+        team: "cloudmrhub"
+        status: "dev" # dev/test/prod
+        
+
+      StageName: !Ref StageName
+      CacheClusterEnabled: false
+      Cors:
+        AllowMethods: "'POST,GET,PUT,DELETE,OPTIONS'"
+        AllowOrigin: "'*'"
+        AllowHeaders: "'*'"
+
+
+      Auth:
+        AddDefaultAuthorizerToCorsPreflight: false
+        DefaultAuthorizer: UserAuthorizer
+        Authorizers:
+          UserAuthorizer:
+            FunctionArn: !Ref UserAuthorizerFunctionARN
+            Identity:
+              Header: Authorization
+
+
+# #   # This is the function that authorizes users
+  DataBucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      CorsConfiguration:
+        CorsRules:
+        - AllowedHeaders:
+            - "*"
+          AllowedMethods:
+            - GET
+            - PUT
+            - HEAD
+            - POST
+            - DELETE
+          AllowedOrigins:
+            - "*"
+          ExposedHeaders:
+            - "ETag"
+
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+      OwnershipControls:
+        Rules:
+        - ObjectOwnership: BucketOwnerPreferred
+
+
+  DeleteJobFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: >
+        This function deletes an object by his id        
+        
+      Tags:
+        owner: "montie01"
+        maintainer: "montie01"
+        project: "mroptimum"
+        version: "v1"
+        team: "cloudmrhub"
+      PackageType: Zip
+      CodeUri: delete-job-python/
+      Handler: app.lambda_handler
+      Runtime: python3.10
+      Events:
+        DeleteJobApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref CAMRIEFrontendAPI
+            Path: /pipeline
+            Method: delete
+            Auth:
+              Authorizer: UserAuthorizer
+  
+  
+  GetZipFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: >
+        This function takes a result file from s3 (specified with Bucket and Key), unzips
+        it and returns its data through presigned url links
+      PackageType: Zip
+      CodeUri: getZip/
+      Handler: app.lambda_handler
+      Runtime: python3.9
+      Policies:
+        - S3FullAccessPolicy:
+            BucketName: !Ref ResultsBucketPName
+        - S3FullAccessPolicy:
+            BucketName: mytestcmr
+        - S3FullAccessPolicy:
+            BucketName: !Ref FailedBucketPName
+      Events:
+        GetZipAPI:
+          Type: Api
+          Properties:
+            Path: /unzip
+            Method: post
+            RestApiId: !Ref CAMRIEFrontendAPI
+            Auth:
+              Authorizer: UserAuthorizer
+
+  DataReadFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Zip
+      CodeUri: data-access-python/
+      Handler: data.read_data
+      Runtime: python3.10
+      Events:
+        DataReadApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref CAMRIEFrontendAPI
+            Method: get
+            Path: /readdata
+            Auth:
+              Authorizer: UserAuthorizer
+
+      Policies:
+        - S3FullAccessPolicy:
+            BucketName: !Ref DataBucket
+        - S3FullAccessPolicy:
+            BucketName: mytestcmr
+
+  DeleteFileFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Zip
+      CodeUri: data-access-python/
+      Handler: data.deleteData
+      Runtime: python3.10
+      Events:
+        DataReadApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref CAMRIEFrontendAPI
+            Method: get
+            Path: /deletedata
+            Auth:
+              Authorizer: UserAuthorizer
+
+      Policies:
+        - S3FullAccessPolicy:
+            BucketName: !Ref DataBucket
+        - S3FullAccessPolicy:
+            BucketName: mytestcmr
+
+
+  UpdateFileFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Zip
+      CodeUri: data-access-python/
+      Handler: data.updateData
+      Runtime: python3.10
+      Events:
+        DataReadApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref CAMRIEFrontendAPI
+            Method: post
+            Path: /updatedata
+            Auth:
+              Authorizer: UserAuthorizer
+
+      Policies:
+        - S3FullAccessPolicy:
+            BucketName: !Ref DataBucket
+        - S3FullAccessPolicy:
+            BucketName: mytestcmr
+
+
+
+  UploadRequestFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: getSignedURL/
+      Handler: app.handler
+      Runtime: nodejs16.x
+      Environment:
+        Variables:
+          UploadBucket: !Ref DataBucket
+      Policies:
+        - S3FullAccessPolicy:
+            BucketName: !Ref DataBucket
+        - S3FullAccessPolicy:
+            BucketName: mytestcmr
+
+        # This permission allows the Lambda function to request signed URLs
+        # for objects that will be publicly readable. Uncomment if you want this ACL.
+
+      Events:
+        UploadAssetAPI:
+          Type: Api
+          Properties:
+            Path: /uploads
+            Method: post
+            RestApiId: !Ref CAMRIEFrontendAPI
+            Auth:
+              Authorizer: UserAuthorizer
+
+  UploadRequestFunctionLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: upload-node-layer
+      ContentUri: getSignedURL/
+      CompatibleRuntimes:
+        - nodejs16.x
+    Metadata:
+      BuildMethod: nodejs16.x
+
+  UploadInitiateFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: uploadInit/
+      Handler: app.handler
+      Runtime: nodejs16.x
+      Environment:
+        Variables:
+          UploadBucket: !Ref DataBucket
+          PushCortex: True
+      Policies:
+        - S3FullAccessPolicy:
+            BucketName: !Ref DataBucket
+        - S3FullAccessPolicy:
+            BucketName: mytestcmr
+
+        # This permission allows the Lambda function to request signed URLs
+        # for objects that will be publicly readable. Uncomment if you want this ACL.
+
+      Events:
+        UploadAssetAPI:
+          Type: Api
+          Properties:
+            Path: /uploadinitiate
+            Method: post
+            RestApiId: !Ref CAMRIEFrontendAPI
+            Auth:
+              Authorizer: UserAuthorizer
+
+
+  DownloadRequestFunction:
+    # More info about Function Resource: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#awsserverlessfunction
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: downloadRequestFunction/
+      Handler: app.handler
+      Runtime: nodejs16.x
+      Timeout: 30
+      MemorySize: 128
+      Policies:
+        - S3FullAccessPolicy:
+            BucketName: !Ref ResultsBucketPName
+      Layers:
+          - !Ref UploadRequestFunctionLayer
+      Events:
+        DownloadAssetAPI:
+          Type: Api
+          Properties:
+            Path: /downloads
+            Method: get
+            RestApiId: !Ref CAMRIEFrontendAPI
+            Auth:
+              Authorizer: UserAuthorizer
+
+
+
+
+
+  UploadFinalizeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: uploadFinalize/
+      Handler: app.handler
+      Runtime: nodejs16.x
+      Environment:
+        Variables:
+          UploadBucket: !Ref DataBucket
+      Policies:
+        - S3FullAccessPolicy:
+            BucketName: !Ref DataBucket
+        - S3FullAccessPolicy:
+            BucketName: mytestcmr
+
+        # This permission allows the Lambda function to request signed URLs
+        # for objects that will be publicly readable. Uncomment if you want this ACL.
+
+      Events:
+        UploadAssetAPI:
+          Type: Api
+          Properties:
+            Path: /uploadfinalize
+            Method: post
+            RestApiId: !Ref CAMRIEFrontendAPI
+            Auth:
+              Authorizer: UserAuthorizer
+
+
+
+  UploadResultsInitiateFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: uploadInit/
+      Handler: app.handler
+      Runtime: nodejs16.x
+      Environment:
+        Variables:
+          UploadBucket: !Ref ResultsBucketPName
+          PushCortex: False
+      Policies:
+        - S3FullAccessPolicy:
+            BucketName: !Ref ResultsBucketPName
+        # This permission allows the Lambda function to request signed URLs
+        # for objects that will be publicly readable. Uncomment if you want this ACL.
+
+      Events:
+        UploadAssetAPI:
+          Type: Api
+          Properties:
+            Path: /uploadresultsinitiate
+            Method: post
+            RestApiId: !Ref CAMRIEFrontendAPI
+            Auth:
+              Authorizer: UserAuthorizer
+
+  UploadResultsFinalizeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: uploadFinalize/
+      Handler: app.handler
+      Runtime: nodejs16.x
+      Environment:
+        Variables:
+          UploadBucket: !Ref ResultsBucketPName
+      Policies:
+        - S3FullAccessPolicy:
+            BucketName: !Ref ResultsBucketPName
+        # This permission allows the Lambda function to request signed URLs
+        # for objects that will be publicly readable. Uncomment if you want this ACL.
+
+      Events:
+        UploadAssetAPI:
+          Type: Api
+          Properties:
+            Path: /uploadresultsfinalize
+            Method: post
+            RestApiId: !Ref CAMRIEFrontendAPI
+            Auth:
+              Authorizer: UserAuthorizer
+
+Outputs:
+  DataBucket:
+    Description: The S3 bucket for the frontend
+    Value: !Ref DataBucket
+    Export:
+      Name: !Sub "${AWS::StackName}-DataBucket"
+    
+  DeleteJobApi:
+    Description: API Gateway endpoint URL for Prod stage for Delete function
+    Value: !Sub "https://${CAMRIEFrontendAPI}.execute-api.${AWS::Region}.amazonaws.com/${StageName}/pipeline"
+    Export:
+      Name: !Sub "${AWS::StackName}-DeleteJobApi"
+
+  GetZipApi:
+    Description: API Gateway endpoint URL for Prod stage for GetZip function
+    Value: !Sub "https://${CAMRIEFrontendAPI}.execute-api.${AWS::Region}.amazonaws.com/${StageName}/unzip"
+    Export:
+      Name: !Sub "${AWS::StackName}-GetZipApi"
+  
+  DataReadApi:
+    Description: API Gateway endpoint URL for Prod stage for DataRead function
+    Value: !Sub "https://${CAMRIEFrontendAPI}.execute-api.${AWS::Region}.amazonaws.com/${StageName}/readdata"
+    Export:
+      Name: !Sub "${AWS::StackName}-DataReadApi"
+    
+
+  DeleteFileApi:
+    Description: API Gateway endpoint URL for Prod stage for DeleteFile function
+    Value: !Sub "https://${CAMRIEFrontendAPI}.execute-api.${AWS::Region}.amazonaws.com/${StageName}/deletedata"
+    Export:
+      Name: !Sub "${AWS::StackName}-DeleteFileApi"
+  
+  UpdateFileApi:
+    Description: API Gateway endpoint URL for Prod stage for UpdateFile function
+    Value: !Sub "https://${CAMRIEFrontendAPI}.execute-api.${AWS::Region}.amazonaws.com/${StageName}/updatedata"
+    Export:
+      Name: !Sub "${AWS::StackName}-UpdateFileApi"
+  
+  UploadRequestApi:
+    Description: API Gateway endpoint URL for Prod stage for UploadRequest function
+    Value: !Sub "https://${CAMRIEFrontendAPI}.execute-api.${AWS::Region}.amazonaws.com/${StageName}/uploads"
+    Export:
+      Name: !Sub "${AWS::StackName}-UploadRequestApi"
+  UploadInitiateApi:
+    Description: API Gateway endpoint URL for Prod stage for UploadInitiate function
+    Value: !Sub "https://${CAMRIEFrontendAPI}.execute-api.${AWS::Region}.amazonaws.com/${StageName}/uploadinitiate"
+    Export:
+      Name: !Sub "${AWS::StackName}-UploadInitiateApi"
+  DownloadRequestApi:
+    Description: API Gateway endpoint URL for Prod stage for DownloadRequest function
+    Value: !Sub "https://${CAMRIEFrontendAPI}.execute-api.${AWS::Region}.amazonaws.com/${StageName}/downloads"
+    Export:
+      Name: !Sub "${AWS::StackName}-DownloadRequestApi"
+  UploadFinalizeApi:
+    Description: API Gateway endpoint URL for Prod stage for UploadFinalize function
+    Value: !Sub "https://${CAMRIEFrontendAPI}.execute-api.${AWS::Region}.amazonaws.com/${StageName}/uploadfinalize"
+    Export:
+      Name: !Sub "${AWS::StackName}-UploadFinalizeApi"
+  UploadResultsInitiateApi:
+    Description: API Gateway endpoint URL for Prod stage for UploadResultsInitiate function
+    Value: !Sub "https://${CAMRIEFrontendAPI}.execute-api.${AWS::Region}.amazonaws.com/${StageName}/uploadresultsinitiate"
+    Export:
+      Name: !Sub "${AWS::StackName}-UploadResultsInitiateApi"
+  UploadResultsFinalizeApi:
+    Description: API Gateway endpoint URL for Prod stage for UploadResultsFinalize function
+    Value: !Sub "https://${CAMRIEFrontendAPI}.execute-api.${AWS::Region}.amazonaws.com/${StageName}/uploadresultsfinalize"
+    Export:
+      Name: !Sub "${AWS::StackName}-UploadResultsFinalizeApi"
+  FrontendAPI:
+    Description: API Gateway endpoint URL for Prod stage for Frontend
+    Value: !Sub "https://${CAMRIEFrontendAPI}.execute-api.${AWS::Region}.amazonaws.com/${StageName}"
+    Export:
+      Name: !Sub "${AWS::StackName}-FrontendAPI"
+  
+
+
