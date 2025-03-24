@@ -86,6 +86,19 @@ Resources:
         UserAuthorizerFunctionARN: !GetAtt CAMRIEAPIApp.Outputs.UserAuthorizerFunctionARN
 
 
+  # AmplifyAPP:
+  #   Type: AWS::Serverless::Application
+  #   Properties:
+  #     Location: amplify/template.yaml
+  #     Parameters:
+  #       GithubToken: !Ref GithubToken
+  #       CloudmrServer: !Ref CloudmrServer
+  #       CAMRIEServer: !Ref CAMRIEServer
+  #       QueueServer: !Ref QueueServer
+  #       ProfileServer: !Ref ProfileServer
+  #       ApiUrl: !Ref ApiUrl
+  #       ApiToken: !Ref ApiToken
+
 
 
   # CAMRIEUsagePlan:
