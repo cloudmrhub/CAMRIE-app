@@ -56,21 +56,23 @@
             0.5
           ]
         },
-        "task": {
-          "version": "v0",
-          "acquisition": 2,
-          "type": "SNR",
-          "id": 2,
-          "name": "PMR",
-          "options": {
-            "NR": 20,
-            "reconstructor": {
-              "type": "recon",
-              "name": "GRAPPA",
-              "id": 4,
-              "options": {
-                "noise": {},
-                "signal": {}
+        "reconstructor": {
+          "task": {
+            "version": "v0",
+            "acquisition": 2,
+            "type": "SNR",
+            "id": 2,
+            "name": "PMR",
+            "options": {
+              "NR": 20,
+              "reconstructor": {
+                "type": "recon",
+                "name": "GRAPPA",
+                "id": 4,
+                "options": {
+                  "noise": {},
+                  "signal": {}
+                }
               }
             }
           }
@@ -78,45 +80,37 @@
       },
       "log": [
         {
-          "when": "14/03/2025, 17:41:15",
+          "when": "19/03/2025, 18:23:45",
           "what": "starting preprocessing",
           "type": "start"
         },
         {
-          "when": "14/03/2025, 17:41:15",
-          "what": "read task json position",
-          "type": "procedure"
-        },
-        {
-          "when": "14/03/2025, 17:41:16",
-          "what": "downloaded task json",
-          "type": "procedure"
-        },
-        {
-          "when": "14/03/2025, 17:41:16",
+          "when": "19/03/2025, 18:23:45",
           "what": "extracted field id",
           "type": "procedure"
         },
         {
-          "when": "14/03/2025, 17:41:16",
+          "when": "19/03/2025, 18:23:45",
           "what": "extracted sequence id",
           "type": "procedure"
         },
         {
-          "when": "14/03/2025, 17:41:16",
+          "when": "19/03/2025, 18:23:45",
           "what": "queried field id",
           "type": "procedure"
         },
         {
-          "when": "14/03/2025, 17:41:16",
+          "when": "19/03/2025, 18:23:45",
           "what": "queried sequence id",
           "type": "procedure"
         },
         {
-          "when": "14/03/2025, 17:41:16",
+          "when": "19/03/2025, 18:23:45",
           "what": "finished preprocessing",
           "type": "end"
         }
-      ]
+      ],
+      "token": "Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJodHRwOlwvXC9jYW5jZWxpdC1lbnYtMS5lYmEtcG1hbWN1djUudXMtZWFzdC0xLmVsYXN0aWNiZWFuc3RhbGsuY29tXC9hcGlcL2F1dGhcL2xvZ2luIiwiaWF0IjoxNzQyMzk0MjIyLCJleHAiOjE3NDI0ODA2MjIsIm5iZiI6MTc0MjM5NDIyMiwianRpIjoiOGUzM05NN3pSZktlbzl2RiIsInN1YiI6OTk5OSwicHJ2IjoiODdlMGFmMWVmOWZkMTU4MTJmZGVjOTcxNTNhMTRlMGIwNDc1NDZhYSJ9.GLLN2B62NhQMzgpTWSV2okRxt41y35cLO7n1Sa_BuY8",
+      "pipeline": "015cb729-de0b-3240-aab4-d26d19e30b9e"
     }
   }

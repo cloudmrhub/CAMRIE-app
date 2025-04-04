@@ -127,6 +127,17 @@ def handler(event=None, context=None, s3=None):
     K.setImageFromNumpy(data)
     OUT.addAble(K,0,"KSpace")
     
+    tmpdirectory=OUT.tmppathable.getPath()
+    bartfile=tmpdirectory+"/bart"
+    print(bartfile)
+    for f in c.write_cfl(data,bartfile):
+        print(f)
+        OUT.addAuxiliaryFile(f)
+    ismrmrd=tmpdirectory+"/out.h5"
+    OUT.addAuxiliaryFile(c.write_kspace_to_ismrmrd(data, axes=("frequency", "phase", "coil"),filename=ismrmrd)    )
+
+    
+    
     R=cm.cm2DReconRSS()
     R.setSignalKSpace(data)
     R.setNoiseCovariance(sitk.GetArrayFromImage(NC))
@@ -136,9 +147,9 @@ def handler(event=None, context=None, s3=None):
     R.__class__=cm.cm2DKellmanRSS
     SNR=ima.numpyToImaginable(R.getOutput())
     OUT.addAble(SNR,3,"SNR")
+    print(result)
     OUT.exportAndZipResultsToS3(result,s3=s3)
       
-    
     
     
     return {

@@ -83,7 +83,7 @@ def lambda_handler(event, context):
             'executionArn': sf_response.get("executionArn"),
             'startDate': str(sf_response.get("startDate")),
             'job': job,
-            'state_machine_arn': state_machine_arn,
-            'state_machine_response': json.dumps(sf_response)
+            'state_machine_arn': state_machine_arn
+
         })
     }

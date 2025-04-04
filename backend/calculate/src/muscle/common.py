@@ -35,6 +35,8 @@ def write_cfl(data, filename):
         real_imag_data = np.stack((data.real, data.imag), axis=-1)
         # Convert to float32 and write in binary format
         real_imag_data.astype(np.float32).tofile(cfl_file)
+    
+    return filename+".hdr",filename+".cfl"
         
 def read_cfl(filename):
     """Read BART .cfl and .hdr files and return the complex data array."""
@@ -175,6 +177,77 @@ def process_sliceKOMAMRI(SL, B0, MODEL, PROP, SEQ, OUTDIR, GPU=False, NT=10):
     R.setPrewhitenedSignal(data)
     return R.getOutput(),SL
 
+
+import ismrmrd
+import ismrmrd.xsd
+from typing import Tuple, Union
+
+def write_kspace_to_ismrmrd(
+    kspace: np.ndarray,
+    axes: Tuple[str, str, str],
+    filename: str = "output_kspace.h5",
+    fov: Tuple[float, float, float] = (220.0, 220.0, 5.0),
+    freq_MHz: float = 123.0
+) -> None:
+    """
+    Write a NumPy k-space array to an ISMRMRD HDF5 file.
+
+    Parameters:
+        kspace (np.ndarray): The k-space data (e.g., shape [64, 64, 8])
+        axes (Tuple[str, str, str]): A tuple representing the meaning of each axis.
+                                     Must include 'frequency', 'phase', and 'coil'
+        filename (str): Output filename
+        fov (Tuple[float, float, float]): Field of view in mm (x, y, z)
+        freq_MHz (float): Center frequency in MHz
+    """
+    assert set(axes) == {"frequency", "phase", "coil"}, "axes must be a permutation of ('frequency', 'phase', 'coil')"
+    
+    # Map the dimensions
+    axis_map = {name: i for i, name in enumerate(axes)}
+    freq_dim = axis_map['frequency']
+    phase_dim = axis_map['phase']
+    coil_dim = axis_map['coil']
+    
+    # Reorder kspace to [coil, phase, freq]
+    kspace_reordered = np.moveaxis(kspace, [coil_dim, phase_dim, freq_dim], [0, 1, 2])
+    coils, ny, nx = kspace_reordered.shape
+
+    # Create ISMRMRD header
+    header = ismrmrd.xsd.ismrmrdHeader()
+    header.experimentalConditions = ismrmrd.xsd.experimentalConditionsType(
+        H1resonanceFrequency_Hz=int(freq_MHz * 1e6)
+    )
+    header.acquisitionSystemInformation = ismrmrd.xsd.acquisitionSystemInformationType()
+    
+    header.encoding = [ismrmrd.xsd.encodingType()]
+    header.encoding[0].trajectory = 'cartesian'
+
+    enc_space = ismrmrd.xsd.encodingSpaceType()
+    enc_space.matrixSize = ismrmrd.xsd.matrixSizeType(x=nx, y=ny, z=1)
+    enc_space.fieldOfView_mm = ismrmrd.xsd.fieldOfViewMm(x=fov[0], y=fov[1], z=fov[2])
+    header.encoding[0].encodedSpace = enc_space
+    header.encoding[0].reconSpace = enc_space
+
+    # Create ISMRMRD Dataset
+    dset = ismrmrd.Dataset(filename, "dataset", create_if_needed=True)
+    dset.write_xml_header(header.toXML('utf-8'))
+
+    for ky in range(ny):
+        acq = ismrmrd.Acquisition()
+        acq.resize(nx, coils)      
+        acq.version = 1
+        
+        
+        acq.channel_mask[0] = (1 << coils) - 1
+        acq.idx.kspace_encode_step_1 = ky
+        acq.flags = ismrmrd.ACQ_LAST_IN_REPETITION if ky == ny - 1 else 0
+
+        # Extract data for current ky
+        acq.data[:] = kspace_reordered[:, ky, :]
+        dset.append_acquisition(acq)
+
+    print(f"✅ ISMRMRD file written: {filename}")
+    return filename
 
 if __name__=="__main__":
     OUT="pipeline/Duke_5mm_7T_PWC_GMTcoil_ultimatesurfacebasis_TMD.zip"
