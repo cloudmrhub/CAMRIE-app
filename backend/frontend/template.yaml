@@ -64,7 +64,7 @@ Resources:
       StageName: !Ref StageName
       CacheClusterEnabled: false
       Cors:
-        AllowMethods: "'POST,GET,PUT,DELETE,OPTIONS'"
+        AllowMethods: "'POST,GET,PUT,DELETE,OPTIONS,HEAD'"
         AllowOrigin: "'*'"
         AllowHeaders: "'*'"
 

@@ -73,7 +73,7 @@ def upload_data(event, context):
         if response.status_code != 200:
             raise Exception("Failed to save file metadata to cloudmrhub.com")
 
-        return {
+        return fixCORS({
             "statusCode": 200,
             "headers": {
                 'Access-Control-Allow-Origin': '*'
@@ -82,13 +82,13 @@ def upload_data(event, context):
                 "upload_url": url,
                 "response": response.json()
             })
-        }
+        })
     except Exception as error:
         print(f'Uploading data failed due to: {error}')
-        return {"statusCode": 403,
+        return fixCORS({"statusCode": 403,
             "headers": {
                 'Access-Control-Allow-Origin': '*'
-            }, "body":"Upload failed for user"}
+            }, "body":"Upload failed for user"})
 
 
 def read_data(event, context):
@@ -114,16 +114,16 @@ def read_data(event, context):
             data['database'] = 's3'
             # {'user_id':data['user_id'],'filename':alias,'size':data['size'],'location':location,'link':url}
             file_list.append(data)
-        return {"statusCode":200,
+        return fixCORS({"statusCode":200,
             "headers": {
                 'Access-Control-Allow-Origin': '*'
-            }, "body":json.dumps(file_list)}
+            }, "body":json.dumps(file_list)})
     except Exception as error:
         print(f'Reading data failed due to: {error}')
-        return {"statusCode": 403,
+        return fixCORS({"statusCode": 403,
             "headers": {
                 'Access-Control-Allow-Origin': '*',
-            }, "body":"access failed"}
+            }, "body":"access failed"})
 
 
 def deleteData(event, context):
