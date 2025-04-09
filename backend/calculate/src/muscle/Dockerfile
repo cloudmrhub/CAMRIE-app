@@ -42,7 +42,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 ENV JULIA_DEPOT_PATH="/tmp/:${JULIA_DEPOT_PATH}"
 
 RUN julia -e "using Pkg; Pkg.instantiate();Pkg.precompile();"
-
+RUN echo "Last Build: Eros Montin $(date)" > /tmp/last_build.txt
 RUN pip install git+https://github.com/erosmontin/pyable
 RUN pip install --upgrade git+https://github.com/cloudmrhub/cloudmr-tools
 COPY . .

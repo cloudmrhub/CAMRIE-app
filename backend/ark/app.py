@@ -9,8 +9,8 @@ pipelineAPI =os.getenv('PipelineCompleted')
 pipelineAPIFailed =os.getenv('PipelineFailed')
 pipelinescheduleAPI = os.getenv("PipelineScheduler")
 
-bucket_result=os.getenv("ResultsBucketName","result")
-bucket_failed=os.getenv("FailedBucketName","failed")
+bucket_result=os.getenv("ResultsBucket","result")
+bucket_failed=os.getenv("FailedBucket","failed")
 application=os.getenv("Application","CAMRIE")
 
 def getHeadersForRequests():
@@ -32,18 +32,20 @@ def lambda_handler(event, context):
     file_key = event["Records"][0]["s3"]["object"]["key"]
     #save zip  file to local
     #create a random name 
-
+    print("bucket", bucket_name)
+    print("file", file_key)
     fj = f"/tmp/{uuid.uuid4()}.zip"
+    print("fj", fj)
     s3 = boto3.resource("s3")
     s3.Bucket(bucket_name).download_file(file_key,fj)
     archive = zipfile.ZipFile(fj, 'r')
     J=archive.read('info.json')
     J=json.loads(J)
     token=J["headers"]["options"]["token"]
-    
+    print("token", token)
     
     pipelineid=J["headers"]["options"]["pipelineid"]
-    
+    print("pipelineid", pipelineid)
     if pipelineid==None:
 
         alias=J["headers"]["options"]["alias"]
@@ -63,13 +65,17 @@ def lambda_handler(event, context):
 
     
     print("bucket_name",bucket_name)
-
+    print("result bucket is", bucket_result)
+    print("failed bucket is", bucket_failed)
+    print("sending API to CloudMR",end= " ")
     if bucket_name==bucket_result:
         url=f'{pipelineAPI}/{pipelineid}'
-        r2=requests.post(url, data=json.dumps(data2), headers=getHeadersForRequestsWithToken(token))
-        print("ok")
+        r2=requests.post(url, data=json.dumps(data2), headers=getHeadersForRequestsWithToken(token),    verify=False )
+        print("ok ", end=" ")
     elif bucket_name==bucket_failed:
         url=f'{pipelineAPIFailed}/{pipelineid}'
-        r2=requests.post(url, data=json.dumps(data2), headers=getHeadersForRequestsWithToken(token))
-        print("failed")
+        r2=requests.post(url, data=json.dumps(data2), headers=getHeadersForRequestsWithToken(token),    verify=False )
+        print("failed  ",end=" ")
+
+    print(" task, updated db")
     return True

@@ -5,8 +5,6 @@ Description: Template that reorders resources to avoid circular dependency witho
 
 
 Parameters:
-  
-
   ResultsBucketPName:
     Type: String
     Description: "The fixed name for the Results bucket"
@@ -15,7 +13,25 @@ Parameters:
     Type: String
     Description: "The fixed name for the Failed bucket"
     Default: "camrie-failed"
-  
+  PipelineCompleted:
+    Type: String
+    Description: API endpoint for pipeline completed
+  PipelineFailed:
+    Type: String
+    Description: API endpoint for pipeline failed
+  PipelineScheduler:
+    Type: String
+    Description: API endpoint for pipeline scheduler
+
+Globals:
+  Function:
+    Environment:
+      Variables:
+        PipelineCompleted: !Ref PipelineCompleted
+        PipelineFailed: !Ref PipelineFailed
+        PipelineScheduler: !Ref PipelineScheduler
+        Application: CAMRIE
+
 Resources:
 
 
@@ -82,6 +98,8 @@ Resources:
       CodeUri: .
       Handler: app.lambda_handler
       Runtime: python3.9
+      MemorySize: 512
+      Timeout: 60
       Policies:
         - S3FullAccessPolicy:
             BucketName: !Ref ResultsBucketPName
@@ -91,6 +109,11 @@ Resources:
         Variables:
           ResultsBucket: !Ref ResultsBucketPName
           FailedBucket: !Ref FailedBucketPName
+          PipelineCompleted: !Ref PipelineCompleted
+          PipelineFailed: !Ref PipelineFailed
+          PipelineScheduler: !Ref PipelineScheduler
+          Application: CAMRIE
+
          
       Events:
         S3ResultsEvent:

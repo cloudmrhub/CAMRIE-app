@@ -50,7 +50,10 @@ Resources:
     Type: AWS::Serverless::Application
     Properties:
       Location: ark/template.yaml
-
+      Parameters:
+        PipelineCompleted: !Sub "https://${CortexHost}/api/pipeline/completed"
+        PipelineFailed: !Sub "https://${CortexHost}/api/pipeline/failed"
+        PipelineScheduler: !Sub "https://${CortexHost}/api/pipeline/request"
 
   CAMRIECalculationApp:
     Type: AWS::Serverless::Application
