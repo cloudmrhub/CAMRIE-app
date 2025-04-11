@@ -118,7 +118,7 @@ def handler(event=None, context=None, s3=None):
     
     data=c.simulate_2D_slice(SL, B0, FIELD["T1"],FIELD["T2"],FIELD["T2star"],FIELD["dW"],FIELD["PD"],desired_spin_resolution,"axial",localsequence,OUTDIR,SENS_DIR,GPU,NT,debug=True)
     # data=np.random.rand(100,100,1)+ np.random.rand(100,100,1)*1j
-    data=data.astype(np.complex64)
+    data=data.astype(np.complex128)
     OUT=cmaws.cmrOutput(app="CAMRIE")
     OUT.setToken(token)
     OUT.setPipeline(pipelineid)
