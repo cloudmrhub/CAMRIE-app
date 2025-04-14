@@ -123,9 +123,11 @@ def handler(event=None, context=None, s3=None):
     OUT.setToken(token)
     OUT.setPipeline(pipelineid)
     OUT.out["info"]={"calculation_time": {"time": 0.9518544673919678, "message": None}, "slices": 1}
-    K=ima.Imaginable()
-    K.setImageFromNumpy(data)
-    OUT.addAble(K,0,"KSpace")
+
+    for n in range(data.shape[2]):
+        K=ima.Imaginable()
+        K.setImageFromNumpy(data[...,n])
+        OUT.addAble(K.forkDuplicate(),10+n,f"K-Space Coil #{n:02d}")
     
     tmpdirectory=OUT.tmppathable.getPath()
     bartfile=tmpdirectory+"/bart"
