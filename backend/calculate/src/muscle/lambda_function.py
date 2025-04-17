@@ -131,7 +131,7 @@ def handler(event=None, context=None, s3=None):
     
     tmpdirectory=OUT.tmppathable.getPath()
     bartfile=tmpdirectory+"/bart"
-    print(bartfile)
+    print(data.shape)
     for f in c.write_cfl(data,bartfile):
         print(f)
         OUT.addAuxiliaryFile(f)

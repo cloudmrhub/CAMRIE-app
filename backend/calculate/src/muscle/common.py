@@ -2,7 +2,52 @@ import pynico_eros_montin.pynico as pn
 import cmtools.cm2D as cmh
 import numpy as np
 
-def write_cfl(data, filename):
+
+import numpy as np
+
+import numpy as np
+
+import numpy as np
+
+def write_cfl(data: np.ndarray, filename_base: str):
+    """
+    Write a complex NumPy array to BART .cfl/.hdr exactly like MATLAB’s writecfl.
+    
+    Parameters
+    ----------
+    filename_base : str
+        Path + basename (no extension).
+    data : np.ndarray
+        Complex array of shape (X, Y, C), where C is number of coils.
+    """
+    data = np.asarray(data, dtype=np.complex64)
+    if data.ndim != 3:
+        raise ValueError("Expected data shape (X, Y, coils).")
+
+    # BART wants dims [X, Y, Z, C,...], so insert a dummy Z=1
+    X, Y, C = data.shape
+    arr = data.reshape(X, Y, 1, C)
+
+    # Column‑major ordering → x varies fastest in the .cfl
+    arr = np.asfortranarray(arr)
+
+    # Write header (pad to ≥5 entries so BART reads up to dim 3)
+    dims = list(arr.shape) + [1] * max(0, 5 - arr.ndim)
+    with open(f"{filename_base}.hdr", "w") as f:
+        f.write("# Dimensions\n")
+        f.write(" ".join(str(d) for d in dims) + "\n")
+
+    # Interleave real/imag as float32
+    flat = arr.flatten(order="F")
+    N = flat.size
+    inter = np.empty((2*N,), dtype=np.float32)
+    inter[0::2] = flat.real
+    inter[1::2] = flat.imag
+    inter.tofile(f"{filename_base}.cfl")    
+    return filename_base+".hdr",filename_base+".cfl"
+
+
+def write_cflv0(data, filename):
     """
     Save a multi-coil complex NumPy array as a BART .cfl and .hdr file.
     
@@ -73,6 +118,8 @@ def simulate_2D_slice(SL,B0,T1,T2,T2star,dW,PD,dres,direction,SEQ,OUTDIR,SENS_DI
     os.makedirs(OUTDIR,exist_ok=True)
     B=pn.BashIt()
     B.setCommand(f"julia --project=. --threads=auto simulator.jl {B0} {T1} {T2} {T2star} {dW} {PD} {dres[0]} {dres[1]} {dres[2]} {direction} {SEQ} {OUTDIR} {SL} {SENS_DIR} {GPU}")
+
+    # B.setCommand(f"julia --project=/g/JULIA/ --threads=auto backend/calculate/src/muscle/simulator.jl {B0} {T1} {T2} {T2star} {dW} {PD} {dres[0]} {dres[1]} {dres[2]} {direction} {SEQ} {OUTDIR} {SL} {SENS_DIR} {GPU}")
     print(B.getCommand())
     print("--"*10)
     B.run()
