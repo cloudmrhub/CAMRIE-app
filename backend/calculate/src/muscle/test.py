@@ -6,6 +6,8 @@ import boto3
 import pynico_eros_montin.pynico as pn
 # possible output from donload
 E=pn.Pathable("test/muscle_inputSettings.json")
+# E=pn.Pathable("test/muscle_inputSettings_MC.json")
+
 E=E.readJson()
 import cmtools.cmaws as cmaws
 

@@ -118,7 +118,6 @@ def simulate_2D_slice(SL,B0,T1,T2,T2star,dW,PD,dres,direction,SEQ,OUTDIR,SENS_DI
     os.makedirs(OUTDIR,exist_ok=True)
     B=pn.BashIt()
     B.setCommand(f"julia --project=. --threads=auto simulator.jl {B0} {T1} {T2} {T2star} {dW} {PD} {dres[0]} {dres[1]} {dres[2]} {direction} {SEQ} {OUTDIR} {SL} {SENS_DIR} {GPU}")
-
     # B.setCommand(f"julia --project=/g/JULIA/ --threads=auto backend/calculate/src/muscle/simulator.jl {B0} {T1} {T2} {T2star} {dW} {PD} {dres[0]} {dres[1]} {dres[2]} {direction} {SEQ} {OUTDIR} {SL} {SENS_DIR} {GPU}")
     print(B.getCommand())
     print("--"*10)
