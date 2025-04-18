@@ -230,6 +230,16 @@ from ismrmrdtools import transform
 
 
 
+import numpy as np
+import ismrmrd
+import ismrmrd.xsd
+import datetime
+from datetime import datetime
+def log(message):
+    """Simple logging function"""
+    timestamp = np.datetime64('now').astype(datetime).strftime('%Y-%m-%d %H:%M:%S')
+    print(f"[{timestamp}] {message}")
+
 def write_kspace_to_ismrmrd(kspace_xyz,
                             filename='out.h5',
                             fov_mm=(256.0, 256.0, 5.0),
@@ -257,14 +267,17 @@ def write_kspace_to_ismrmrd(kspace_xyz,
     else:
         raise ValueError("kspace_xyz must be 3D (nkx, nky, coils) or 4D (nkx, nky, slices, coils)")
 
-    print(f"Input kspace_xyz shape: {kspace_xyz.shape}")
-    print(f"Detected {'3D' if is_3d else '2D'} acquisition with {slices} slice(s) and {coils} coil(s)")
+    log(f"Input kspace_xyz shape: {kspace_xyz.shape}")
+    log(f"Detected {'3D' if is_3d else '2D'} acquisition with {slices} slice(s) and {coils} coil(s)")
+    log(f"Frequency encoding (nkx): {nkx}, Phase encoding (nky): {nky}")
 
     # Reorder to (coils, slices, nky, nkx) for easier access
     if is_3d:
         K = np.transpose(kspace_xyz, (3, 2, 1, 0))  # (coils, slices, nky, nkx)
     else:
         K = np.transpose(kspace_xyz, (2, 0, 1))[:, np.newaxis, :, :]  # (coils, 1, nky, nkx)
+
+    log(f"Reordered k-space shape: {K.shape}")
 
     # Open/create ISMRMRD file
     dset = ismrmrd.Dataset(filename, 'dataset', create_if_needed=True)
@@ -323,13 +336,16 @@ def write_kspace_to_ismrmrd(kspace_xyz,
 
     # Prepare Acquisition
     acq = ismrmrd.Acquisition()
-    acq.resize(nkx, coils)
+    acq.resize(nkx, coils)  # Ensure nkx matches input kspace_xyz
     acq.center_sample = nkx // 2
     acq.version = 1
     acq.available_channels = coils
     acq.read_dir[0] = 1.0
     acq.phase_dir[1] = 1.0
     acq.slice_dir[2] = 1.0
+
+    # Verify acquisition data shape
+    log(f"Acquisition data shape: {acq.data.shape}")
 
     # Write each phase-encode line for each slice
     counter = 0
@@ -345,12 +361,19 @@ def write_kspace_to_ismrmrd(kspace_xyz,
             if is_3d:
                 acq.idx.slice = sl
             acq.scan_counter = counter
-            acq.data[:] = K[:, sl, ky, :]
+            
+            # Verify data shape before assignment
+            data_to_assign = K[:, sl, ky, :]
+            if data_to_assign.shape != acq.data.shape:
+                raise ValueError(f"Shape mismatch: data_to_assign {data_to_assign.shape} "
+                               f"does not match acq.data {acq.data.shape}")
+            
+            acq.data[:] = data_to_assign
             dset.append_acquisition(acq)
             counter += 1
 
     dset.close()
-    print(f"Wrote {counter} lines of k-space into '{filename}'")
+    log(f"Wrote {counter} lines of k-space into '{filename}'")
     return filename
 
 if __name__=="__main__":

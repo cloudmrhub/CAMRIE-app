@@ -1,0 +1,116 @@
+{
+    "downloadResult": {
+      "files": {
+        "field": {
+          "Date": "2024-09-01",
+          "File": "/data/PROJECTS/Architecture/lambdaKoma/cloudMR_birdcagecoil.zip",
+          "Channels": "1",
+          "Location": {
+            "Region": "us-east-1",
+            "Bucket": "camrie-app-fieldapp-1s07xzfaxwbo0-mariefieldbucket-m5dxtfkfwe54",
+            "URL": "https://camrie-app-fieldapp-1s07xzfaxwbo0-mariefieldbucket-m5dxtfkfwe54.s3.us-east-1.amazonaws.com/cloudMR_triangularcoil-ismrm25.zip",
+            "Key": "cloudMR_triangularcoil-ismrm25.zip"
+          },
+          "Version": "0.2.3",
+          "User": "gianni02",
+          "Phantom": "duke",
+          "Description": "Birdcage single Coil for 3T MRI scanner with Duke Phantom",
+          "ID": "cloudMR_triangularcoil-ismrm25.zip",
+          "Coil": "birdcage",
+          "B0": "3T"
+        },
+        "sequence": {
+          "Date": "2024-09-01",
+          "File": "/data/PROJECTS/Architecture/lambdaKoma/pipeline/sdl_pypulseq.seq",
+          "Location": {
+            "Region": "us-east-1",
+            "Bucket": "camrie-app-sequencesapp-uoovph67lmx-sequencebucket-d7ix1serybbf",
+            "URL": "https://camrie-app-sequencesapp-uoovph67lmx-sequencebucket-d7ix1serybbf.s3.us-east-1.amazonaws.com/ISMRM25-miniflash-01.seq",
+            "Key": "ISMRM25-miniflash-01.seq"
+          },
+          "Version": "0",
+          "User": "artiga02",
+          "Description": "ISMRM25",
+          "ID": "ISMRM25-miniflash-01.seq",
+          "Type": "pulseq"
+        }
+      },
+      "job": {
+        "version": "1.0",
+        "field_id": "cloudMR_triangularcoil-ismrm25.zip",
+        "sequence_id": "ISMRM25-miniflash-01.seq",
+        "image_plane": {
+          "slice_thickness": 0.5,
+          "spacing_between_slices": 2,
+          "image_position_patient": [
+            1,
+            0,
+            0,
+            0,
+            1,
+            0
+          ],
+          "slice_location": 20,
+          "pixel_spacing": [
+            0.5,
+            0.5
+          ]
+        },
+        "reconstructor": {
+          "task": {
+            "version": "v0",
+            "acquisition": 2,
+            "type": "SNR",
+            "id": 2,
+            "name": "PMR",
+            "options": {
+              "NR": 20,
+              "reconstructor": {
+                "type": "recon",
+                "name": "GRAPPA",
+                "id": 4,
+                "options": {
+                  "noise": {},
+                  "signal": {}
+                }
+              }
+            }
+          }
+        }
+      },
+      "log": [
+        {
+          "when": "19/03/2025, 18:23:45",
+          "what": "starting preprocessing",
+          "type": "start"
+        },
+        {
+          "when": "19/03/2025, 18:23:45",
+          "what": "extracted field id",
+          "type": "procedure"
+        },
+        {
+          "when": "19/03/2025, 18:23:45",
+          "what": "extracted sequence id",
+          "type": "procedure"
+        },
+        {
+          "when": "19/03/2025, 18:23:45",
+          "what": "queried field id",
+          "type": "procedure"
+        },
+        {
+          "when": "19/03/2025, 18:23:45",
+          "what": "queried sequence id",
+          "type": "procedure"
+        },
+        {
+          "when": "19/03/2025, 18:23:45",
+          "what": "finished preprocessing",
+          "type": "end"
+        }
+      ],
+      "token": "Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJodHRwOlwvXC9jYW5jZWxpdC1lbnYtMS5lYmEtcG1hbWN1djUudXMtZWFzdC0xLmVsYXN0aWNiZWFuc3RhbGsuY29tXC9hcGlcL2F1dGhcL2xvZ2luIiwiaWF0IjoxNzQyMzk0MjIyLCJleHAiOjE3NDI0ODA2MjIsIm5iZiI6MTc0MjM5NDIyMiwianRpIjoiOGUzM05NN3pSZktlbzl2RiIsInN1YiI6OTk5OSwicHJ2IjoiODdlMGFmMWVmOWZkMTU4MTJmZGVjOTcxNTNhMTRlMGIwNDc1NDZhYSJ9.GLLN2B62NhQMzgpTWSV2okRxt41y35cLO7n1Sa_BuY8",
+      "pipeline": "015cb729-de0b-3240-aab4-d26d19e30b9e"
+    }
+  }
