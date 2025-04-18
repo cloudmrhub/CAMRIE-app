@@ -136,10 +136,8 @@ def handler(event=None, context=None, s3=None):
         print(f)
         OUT.addAuxiliaryFile(f)
     ismrmrd=tmpdirectory+"/out.h5"
-    OUT.addAuxiliaryFile(c.write_kspace_to_ismrmrd(data, axes=("frequency", "phase", "coil"),filename=ismrmrd)    )
+    OUT.addAuxiliaryFile(c.write_kspace_to_ismrmrd(data, filename=ismrmrd)    )
 
-    
-    
     R=cm.cm2DReconRSS()
     R.setSignalKSpace(data)
     R.setNoiseCovariance(sitk.GetArrayFromImage(NC))

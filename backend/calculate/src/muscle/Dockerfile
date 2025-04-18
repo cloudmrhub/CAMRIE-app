@@ -29,7 +29,8 @@ RUN julia -e "\
     using Pkg; \
     Pkg.Registry.add(\"General\"); \
     Pkg.Registry.add(; url=\"https://github.com/cloudmrhub/CloudRegistry.git\"); \
-    Pkg.add([\"KomaNYU\", \"FileIO\", \"JLD2\", \"NIfTI\", \"NPZ\", \"JSON\",\"KomaNYUFiles\"]);"
+    Pkg.add([\"KomaNYU\", \"FileIO\", \"JLD2\", \"NIfTI\", \"NPZ\", \"JSON\"]); \
+    Pkg.add(name=\"KomaNYUFiles\", version=\"0.9.5\");"
 
 # Copy the requirements.txt file into the container
 COPY requirements.txt .

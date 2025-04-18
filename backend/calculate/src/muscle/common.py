@@ -226,73 +226,131 @@ def process_sliceKOMAMRI(SL, B0, MODEL, PROP, SEQ, OUTDIR, GPU=False, NT=10):
 
 import ismrmrd
 import ismrmrd.xsd
-from typing import Tuple, Union
+from ismrmrdtools import transform
 
-def write_kspace_to_ismrmrd(
-    kspace: np.ndarray,
-    axes: Tuple[str, str, str],
-    filename: str = "output_kspace.h5",
-    fov: Tuple[float, float, float] = (220.0, 220.0, 5.0),
-    freq_MHz: float = 123.0
-) -> None:
+
+
+def write_kspace_to_ismrmrd(kspace_xyz,
+                            filename='out.h5',
+                            fov_mm=(256.0, 256.0, 5.0),
+                            resonance_hz=128e6):
     """
-    Write a NumPy k-space array to an ISMRMRD HDF5 file.
-
+    Write k-space data to an ISMRMRD file.
+    
     Parameters:
-        kspace (np.ndarray): The k-space data (e.g., shape [64, 64, 8])
-        axes (Tuple[str, str, str]): A tuple representing the meaning of each axis.
-                                     Must include 'frequency', 'phase', and 'coil'
-        filename (str): Output filename
-        fov (Tuple[float, float, float]): Field of view in mm (x, y, z)
-        freq_MHz (float): Center frequency in MHz
+    - kspace_xyz: np.ndarray, shape (nkx, nky, coils) for 2D or (nkx, nky, slices, coils) for 3D
+    - filename: str - Output ISMRMRD file name
+    - fov_mm: tuple - Field of view in mm (x, y, z)
+    - resonance_hz: float - Resonance frequency in Hz
+    
+    Returns:
+    - filename: str - Name of the written ISMRMRD file
     """
-    assert set(axes) == {"frequency", "phase", "coil"}, "axes must be a permutation of ('frequency', 'phase', 'coil')"
-    
-    # Map the dimensions
-    axis_map = {name: i for i, name in enumerate(axes)}
-    freq_dim = axis_map['frequency']
-    phase_dim = axis_map['phase']
-    coil_dim = axis_map['coil']
-    
-    # Reorder kspace to [coil, phase, freq]
-    kspace_reordered = np.moveaxis(kspace, [coil_dim, phase_dim, freq_dim], [0, 1, 2])
-    coils, ny, nx = kspace_reordered.shape
+    # Determine if 2D or 3D
+    if kspace_xyz.ndim == 3:
+        nkx, nky, coils = kspace_xyz.shape
+        slices = 1
+        is_3d = False
+    elif kspace_xyz.ndim == 4:
+        nkx, nky, slices, coils = kspace_xyz.shape
+        is_3d = True
+    else:
+        raise ValueError("kspace_xyz must be 3D (nkx, nky, coils) or 4D (nkx, nky, slices, coils)")
 
-    # Create ISMRMRD header
+    print(f"Input kspace_xyz shape: {kspace_xyz.shape}")
+    print(f"Detected {'3D' if is_3d else '2D'} acquisition with {slices} slice(s) and {coils} coil(s)")
+
+    # Reorder to (coils, slices, nky, nkx) for easier access
+    if is_3d:
+        K = np.transpose(kspace_xyz, (3, 2, 1, 0))  # (coils, slices, nky, nkx)
+    else:
+        K = np.transpose(kspace_xyz, (2, 0, 1))[:, np.newaxis, :, :]  # (coils, 1, nky, nkx)
+
+    # Open/create ISMRMRD file
+    dset = ismrmrd.Dataset(filename, 'dataset', create_if_needed=True)
+
+    # Build XML header
     header = ismrmrd.xsd.ismrmrdHeader()
-    header.experimentalConditions = ismrmrd.xsd.experimentalConditionsType(
-        H1resonanceFrequency_Hz=int(freq_MHz * 1e6)
-    )
-    header.acquisitionSystemInformation = ismrmrd.xsd.acquisitionSystemInformationType()
-    
-    header.encoding = [ismrmrd.xsd.encodingType()]
-    header.encoding[0].trajectory = 'cartesian'
 
-    enc_space = ismrmrd.xsd.encodingSpaceType()
-    enc_space.matrixSize = ismrmrd.xsd.matrixSizeType(x=nx, y=ny, z=1)
-    enc_space.fieldOfView_mm = ismrmrd.xsd.fieldOfViewMm(x=fov[0], y=fov[1], z=fov[2])
-    header.encoding[0].encodedSpace = enc_space
-    header.encoding[0].reconSpace = enc_space
+    exp = ismrmrd.xsd.experimentalConditionsType()
+    exp.H1resonanceFrequency_Hz = resonance_hz
+    header.experimentalConditions = exp
 
-    # Create ISMRMRD Dataset
-    dset = ismrmrd.Dataset(filename, "dataset", create_if_needed=True)
+    sys = ismrmrd.xsd.acquisitionSystemInformationType()
+    sys.receiverChannels = coils
+    header.acquisitionSystemInformation = sys
+
+    enc = ismrmrd.xsd.encodingType()
+    enc.trajectory = ismrmrd.xsd.trajectoryType('cartesian')
+
+    # Encoded / recon spaces
+    efov = ismrmrd.xsd.fieldOfViewMm()
+    efov.x, efov.y, efov.z = fov_mm if is_3d else (fov_mm[0], fov_mm[1], 5.0)
+    rfov = ismrmrd.xsd.fieldOfViewMm()
+    rfov.x, rfov.y, rfov.z = efov.x, efov.y, efov.z
+
+    emat = ismrmrd.xsd.matrixSizeType()
+    emat.x, emat.y, emat.z = nkx, nky, slices if is_3d else 1
+    rmat = ismrmrd.xsd.matrixSizeType()
+    rmat.x, rmat.y, rmat.z = nkx, nky, slices if is_3d else 1
+
+    espace = ismrmrd.xsd.encodingSpaceType()
+    espace.matrixSize = emat
+    espace.fieldOfView_mm = efov
+    rspace = ismrmrd.xsd.encodingSpaceType()
+    rspace.matrixSize = rmat
+    rspace.fieldOfView_mm = rfov
+
+    enc.encodedSpace = espace
+    enc.reconSpace = rspace
+
+    limits = ismrmrd.xsd.encodingLimitsType()
+    lim1 = ismrmrd.xsd.limitType()
+    lim1.minimum = 0
+    lim1.center = nky // 2
+    lim1.maximum = nky - 1
+    limits.kspace_encoding_step_1 = lim1
+    if is_3d:
+        lim2 = ismrmrd.xsd.limitType()
+        lim2.minimum = 0
+        lim2.center = slices // 2
+        lim2.maximum = slices - 1
+        limits.slice = lim2
+    enc.encodingLimits = limits
+
+    header.encoding.append(enc)
     dset.write_xml_header(header.toXML('utf-8'))
 
-    for ky in range(ny):
-        acq = ismrmrd.Acquisition()
-        acq.resize(nx, coils)      
-        acq.version = 1
-        
-        
-        acq.channel_mask[0] = (1 << coils) - 1
-        acq.idx.kspace_encode_step_1 = ky
-        acq.flags = ismrmrd.ACQ_LAST_IN_REPETITION if ky == ny - 1 else 0
+    # Prepare Acquisition
+    acq = ismrmrd.Acquisition()
+    acq.resize(nkx, coils)
+    acq.center_sample = nkx // 2
+    acq.version = 1
+    acq.available_channels = coils
+    acq.read_dir[0] = 1.0
+    acq.phase_dir[1] = 1.0
+    acq.slice_dir[2] = 1.0
 
-        # Extract data for current ky
-        acq.data[:] = kspace_reordered[:, ky, :]
-        dset.append_acquisition(acq)
+    # Write each phase-encode line for each slice
+    counter = 0
+    for sl in range(slices):
+        for ky in range(nky):
+            acq.clearAllFlags()
+            if ky == 0 and sl == 0:
+                acq.setFlag(ismrmrd.ACQ_FIRST_IN_SLICE)
+            if ky == nky - 1 and sl == slices - 1:
+                acq.setFlag(ismrmrd.ACQ_LAST_IN_SLICE)
 
-    print(f"✅ ISMRMRD file written: {filename}")
+            acq.idx.kspace_encode_step_1 = ky
+            if is_3d:
+                acq.idx.slice = sl
+            acq.scan_counter = counter
+            acq.data[:] = K[:, sl, ky, :]
+            dset.append_acquisition(acq)
+            counter += 1
+
+    dset.close()
+    print(f"Wrote {counter} lines of k-space into '{filename}'")
     return filename
 
 if __name__=="__main__":
