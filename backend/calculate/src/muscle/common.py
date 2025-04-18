@@ -235,6 +235,9 @@ import ismrmrd
 import ismrmrd.xsd
 import datetime
 from datetime import datetime
+
+
+
 def log(message):
     """Simple logging function"""
     timestamp = np.datetime64('now').astype(datetime).strftime('%Y-%m-%d %H:%M:%S')
@@ -245,7 +248,7 @@ def write_kspace_to_ismrmrd(kspace_xyz,
                             fov_mm=(256.0, 256.0, 5.0),
                             resonance_hz=128e6):
     """
-    Write k-space data to an ISMRMRD file.
+    Write k-space data to an ISMRMRD file. v1.0
     
     Parameters:
     - kspace_xyz: np.ndarray, shape (nkx, nky, coils) for 2D or (nkx, nky, slices, coils) for 3D
@@ -256,7 +259,7 @@ def write_kspace_to_ismrmrd(kspace_xyz,
     Returns:
     - filename: str - Name of the written ISMRMRD file
     """
-    # Determine if 2D or 3D
+    # Validate input shape
     if kspace_xyz.ndim == 3:
         nkx, nky, coils = kspace_xyz.shape
         slices = 1
@@ -271,13 +274,18 @@ def write_kspace_to_ismrmrd(kspace_xyz,
     log(f"Detected {'3D' if is_3d else '2D'} acquisition with {slices} slice(s) and {coils} coil(s)")
     log(f"Frequency encoding (nkx): {nkx}, Phase encoding (nky): {nky}")
 
-    # Reorder to (coils, slices, nky, nkx) for easier access
+    # Reorder to (coils, slices, nky, nkx)
     if is_3d:
-        K = np.transpose(kspace_xyz, (3, 2, 1, 0))  # (coils, slices, nky, nkx)
+        K = np.transpose(kspace_xyz, (3, 2, 1, 0))  # From (nkx, nky, slices, coils) to (coils, slices, nky, nkx)
     else:
-        K = np.transpose(kspace_xyz, (2, 0, 1))[:, np.newaxis, :, :]  # (coils, 1, nky, nkx)
+        K = np.transpose(kspace_xyz, (2, 1, 0))[:, np.newaxis, :, :]  # From (nkx, nky, coils) to (coils, 1, nky, nkx)
 
     log(f"Reordered k-space shape: {K.shape}")
+
+    # Validate reordered shape
+    expected_k_shape = (coils, slices, nky, nkx)
+    if K.shape != expected_k_shape:
+        raise ValueError(f"Reordered k-space shape {K.shape} does not match expected {expected_k_shape}")
 
     # Open/create ISMRMRD file
     dset = ismrmrd.Dataset(filename, 'dataset', create_if_needed=True)
@@ -332,9 +340,11 @@ def write_kspace_to_ismrmrd(kspace_xyz,
     enc.encodingLimits = limits
 
     header.encoding.append(enc)
+    log(f"XML header matrix size: x={emat.x}, y={emat.y}, z={emat.z}")
     dset.write_xml_header(header.toXML('utf-8'))
 
     # Prepare Acquisition
+    log(f"Initializing acquisition with nkx={nkx}, coils={coils}")
     acq = ismrmrd.Acquisition()
     acq.resize(nkx, coils)  # Ensure nkx matches input kspace_xyz
     acq.center_sample = nkx // 2
@@ -346,6 +356,8 @@ def write_kspace_to_ismrmrd(kspace_xyz,
 
     # Verify acquisition data shape
     log(f"Acquisition data shape: {acq.data.shape}")
+    if acq.data.shape != (coils, nkx):
+        raise ValueError(f"Acquisition data shape {acq.data.shape} does not match expected (coils, nkx) = ({coils}, {nkx})")
 
     # Write each phase-encode line for each slice
     counter = 0
@@ -362,8 +374,11 @@ def write_kspace_to_ismrmrd(kspace_xyz,
                 acq.idx.slice = sl
             acq.scan_counter = counter
             
+            # Prepare data to assign
+            data_to_assign = K[:, sl, ky, :]  # Shape should be (coils, nkx)
+            log(f"Assigning data for slice {sl}, ky {ky}: shape {data_to_assign.shape}")
+            
             # Verify data shape before assignment
-            data_to_assign = K[:, sl, ky, :]
             if data_to_assign.shape != acq.data.shape:
                 raise ValueError(f"Shape mismatch: data_to_assign {data_to_assign.shape} "
                                f"does not match acq.data {acq.data.shape}")

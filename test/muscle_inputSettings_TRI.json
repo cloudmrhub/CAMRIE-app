@@ -25,20 +25,20 @@
           "Location": {
             "Region": "us-east-1",
             "Bucket": "camrie-app-sequencesapp-uoovph67lmx-sequencebucket-d7ix1serybbf",
-            "URL": "https://camrie-app-sequencesapp-uoovph67lmx-sequencebucket-d7ix1serybbf.s3.us-east-1.amazonaws.com/ISMRM25-miniflash-01.seq",
-            "Key": "ISMRM25-miniflash-01.seq"
+            "URL": "https://camrie-app-sequencesapp-uoovph67lmx-sequencebucket-d7ix1serybbf.s3.us-east-1.amazonaws.com/ISMRM25-t2w.seq",
+            "Key": "ISMRM25-t2w.seq"
           },
           "Version": "0",
           "User": "artiga02",
           "Description": "ISMRM25",
-          "ID": "ISMRM25-miniflash-01.seq",
+          "ID": "ISMRM25-t2w.seq",
           "Type": "pulseq"
         }
       },
       "job": {
         "version": "1.0",
         "field_id": "cloudMR_triangularcoil-ismrm25.zip",
-        "sequence_id": "ISMRM25-miniflash-01.seq",
+        "sequence_id": "ISMRM25-t2w.seq",
         "image_plane": {
           "slice_thickness": 0.5,
           "spacing_between_slices": 2,
