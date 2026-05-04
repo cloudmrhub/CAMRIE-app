@@ -198,7 +198,7 @@ Resources:
           Properties:
             RestApiId: !Ref CAMRIEFrontendAPI
             Method: get
-            Path: /deletedata
+            Path: /deletedata/{fileid}
             Auth:
               Authorizer: UserAuthorizer
 

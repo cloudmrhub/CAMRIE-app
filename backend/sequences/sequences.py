@@ -11,70 +11,51 @@ bucket_name = "camrie-app-sequencesapp-uoovph67lmx-sequencebucket-d7ix1serybbf"
 region = "us-east-1"  
 field_json = "build/seq.json" 
 os.makedirs("build", exist_ok=True)
-files = [
-    {
-        "id":"ISMRM25-miniflash-00.seq",
-        "file":"/data/PROJECTS/Architecture/lambdaKoma/pipeline/sdl_miniflash.seq",
-        "conf":
-            {   
-                
-                "Type":"pulseq",
-                "Version":"0",
-                "Description":"ISMRM25",
-                "Date":"2024-09-01",
-                "User":"artiga02"
-            }
-    },
-    {
-        "id":"ISMRM25-miniflash-01.seq",
-        "file":"/data/PROJECTS/Architecture/lambdaKoma/pipeline/sdl_pypulseq.seq",
-        "conf":
-            {
-                "Type":"pulseq",
-                "Version":"0",
-                "Description":"ISMRM25",
-                "Date":"2024-09-01",
-                "User":"artiga02"
-            }
-    }
-,
-    {
-        "id":"ISMRM25-t1w.seq",
-        "file":"/data/MYDATA/sequences/sdl_pypulseq_TE10_TR600_os2_largeCrush_xSpoil.seq",
-        "conf":
-            {
-                "Type":"pulseq",
-                "Version":"0",
-                "Description":"ISMRM25",
-                "Date":"2024-09-01",
-                "User":"artiga02"
-            }
-    },
-    {
-        "id":"ISMRM25-t2w.seq",
-        "file":"/data/MYDATA/sequences/sdl_pypulseq_TE80_TR4000_os2_largeCrush_xSpoil.seq",
-        "conf":
-            {
-                "Type":"pulseq",
-                "Version":"0",
-                "Description":"ISMRM25",
-                "Date":"2024-09-01",
-                "User":"artiga02"
-            }
-    },
-    {
-        "id":"ISMRM25-pdw.seq",
-        "file":"/data/MYDATA/sequences/sdl_pypulseq_TE10_TR4000_os2_largeCrush_xSpoil.seq",
-        "conf":
-            {
-                "Type":"pulseq",
-                "Version":"0",
-                "Description":"ISMRM25",
-                "Date":"2024-09-01",
-                "User":"artiga02"
-            }
-    }
-     ]
+
+
+files=[]
+base_dir ="/data/PROJECTS/Architecture/CAMRIE-app/data/sequences"
+
+param_map = {
+    "T1-Weighted_Spoiled_GRE": {"TE": "10ms",  "TR": "40ms",   "FA": [15]},
+    "T1-Weighted_Spin_Echo":    {"TE": "10ms",  "TR": "600ms",  "FA": [90, 180]},
+    "T2-Weighted_Spin_Echo":    {"TE": "80ms",  "TR": "4000ms", "FA": [90, 180]},
+    "PD-Weighted_Spin_Echo":    {"TE": "10ms",  "TR": "4000ms", "FA": [90, 180]},
+}
+
+weighted_seq_names = [
+    "PD-Weighted_Spin_Echo.mtrk",
+    "PD-Weighted_Spin_Echo.seq",
+    "T1-Weighted_Spin_Echo.mtrk",
+    "T1-Weighted_Spin_Echo.seq",
+    "T1-Weighted_Spoiled_GRE.mtrk",
+    "T1-Weighted_Spoiled_GRE.seq",
+    "T2-Weighted_Spin_Echo.mtrk",
+    "T2-Weighted_Spin_Echo.seq",
+]
+
+for name in weighted_seq_names:
+    base = name.rsplit(".", 1)[0]
+    p = param_map[base]
+    _t = "mtrk" if name.endswith(".mtrk") else "pulseq"
+    files.append({
+        "id":   name,
+        "file": os.path.join(base_dir, name),
+        "name":base,
+        "conf": {
+            "Type":        _t,
+            "Version":     "0",
+            "Description": base.replace("_", " "),
+            "Date":        "2025-04-23",
+            "User":        "artiga02",
+            "TE":          p["TE"],
+            "TR":          p["TR"],
+            "FA":          p["FA"],
+        }
+    })
+
+    
+    
 # Step 3: Upload Files
 import pynico_eros_montin.pynico as pn
 
@@ -104,28 +85,30 @@ dynamodb_items = {
                 "Item": {
                     "ID": {"S": file_info["id"]},
                     "File": {"S": file_info["file"]},
-                            
-                            
-                            
-                            "Type": {"S": file_info["conf"]["Type"]},
-                            "Version": {"S": file_info["conf"]["Version"]},
-                            "Description": {"S": file_info["conf"]["Description"]},
-                            "Date": {"S": file_info["conf"]["Date"]},
-                            "User": {"S": file_info["conf"]["User"]},
-                            "Location": {"M": {
-                                "URL": {"S": file_info["location"]["url"]},
-                                "Bucket": {"S": file_info["location"]["bucket"]},
-                                "Region": {"S": file_info["location"]["region"]},
-                                "Key": {"S": file_info["location"]["key"]}
-                            }}
-                        
-                    
+                    "Type": {"S": file_info["conf"]["Type"]},
+                    "Version": {"S": file_info["conf"]["Version"]},
+                    "Description": {"S": file_info["conf"]["Description"]},
+                    "Date": {"S": file_info["conf"]["Date"]},
+                    "User": {"S": file_info["conf"]["User"]},
+                    "Location": {"M": {
+                        "URL": {"S": file_info["location"]["url"]},
+                        "Bucket": {"S": file_info["location"]["bucket"]},
+                        "Region": {"S": file_info["location"]["region"]},
+                        "Key": {"S": file_info["location"]["key"]},
+                        # wrap TE/TR/FA under a Map for DynamoDB
+                        "conf": {"M": {
+                            "TE": {"S": file_info["conf"]["TE"]},
+                            "TR": {"S": file_info["conf"]["TR"]},
+                            "FA": {"L": [
+                                {"N": str(fa)} for fa in file_info["conf"]["FA"]
+                            ]}
+                        }}
+                    }}
                 }
             }
         } for file_info in files
     ]
 }
-
 
 
     

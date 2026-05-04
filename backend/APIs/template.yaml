@@ -74,7 +74,16 @@ Resources:
             Identity:
               ReauthorizeEvery: 0
 
-
+        UsagePlan:
+          CreateUsagePlan: PER_API
+          UsagePlanName: !Sub "${AWS::StackName}-QueueJobPlan"
+          Description:   "Usage plan for MROptimum API"
+          Quota:
+            Limit: 1000
+            Period: MONTH
+          Throttle:
+            BurstLimit: 1000
+            RateLimit: 500
 
   UserAuthorizerFunction:
     Type: AWS::Serverless::Function
@@ -137,7 +146,15 @@ Resources:
             Method: post
             Auth:
               Authorizer: UserAuthorizer
-              # ApiKeyRequired: true
+              ApiKeyRequired: true        
+        PostJobApiEventOptions:
+          Type: Api
+          Properties:
+            RestApiId: !Ref CAMRIEAPI
+            Path: /pipeline
+            Method: options
+            Auth:
+              ApiKeyRequired: false
               
 
 
@@ -159,6 +176,13 @@ Outputs:
   UserAuthorizerFunctionARN:
     Description: "User Authorizer Function ARN"
     Value: !GetAtt UserAuthorizerFunction.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-UserAuthorizerFunctionARN"
+  QueueJobApiKeyID:
+    Description: API Key for the queue‐job endpoint
+    Value: !Ref CAMRIEAPIApiKey
+    Export:
+      Name: !Sub "${AWS::StackName}-QueueJobApiKeyID"
 
 
   

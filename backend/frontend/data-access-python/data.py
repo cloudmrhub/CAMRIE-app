@@ -131,6 +131,14 @@ def deleteData(event, context):
     print("event")
     print(event['queryStringParameters'])
     s3_client = boto3.client('s3')
+    http_method = event.get('httpMethod') or event['requestContext']['http']['method']
+
+    # Handle CORS preflight
+    if http_method.upper() == 'OPTIONS':
+        return fixCORS({
+            'statusCode': 200,
+            'body': ''  # no payload for preflight
+        })
 
     file_id = event['queryStringParameters']['fileid']
     if file_id is None:
