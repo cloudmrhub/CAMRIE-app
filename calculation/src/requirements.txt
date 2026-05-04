@@ -1,0 +1,20 @@
+# Core AWS + HTTP
+boto3
+requests
+
+# MRI pipeline dependencies
+numpy
+SimpleITK
+matplotlib
+h5py
+scipy
+
+# Pulseq reader
+pypulseq
+
+# vtk (optional, used by some helpers)
+vtk
+
+# CloudMR utilities
+pynico_eros_montin @ git+https://github.com/erosmontin/pynico.git
+cmtools @ git+https://github.com/cloudmrhub/cloudmr-tools.git

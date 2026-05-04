@@ -1,0 +1,40 @@
+# ==============================================================================
+#  CAMRIE Fargate image
+#  Python 3.11 + Julia 1.10 + KomaMRI precompiled
+# ==============================================================================
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# ── OS deps ──────────────────────────────────────────────────────────────────
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+        git ca-certificates wget curl libgomp1 \
+ && rm -rf /var/lib/apt/lists/*
+
+# ── Julia 1.10 ────────────────────────────────────────────────────────────────
+ARG JULIA_VERSION=1.10.4
+RUN wget -q https://julialang-s3.julialang.org/bin/linux/x64/1.10/julia-${JULIA_VERSION}-linux-x86_64.tar.gz \
+ && tar -xzf julia-${JULIA_VERSION}-linux-x86_64.tar.gz -C /usr/local --strip-components=1 \
+ && rm julia-${JULIA_VERSION}-linux-x86_64.tar.gz
+
+# ── Pre-install Julia packages (cached layer) ─────────────────────────────────
+COPY install_julia_deps.jl /tmp/install_julia_deps.jl
+RUN julia /tmp/install_julia_deps.jl
+
+# ── Python deps ───────────────────────────────────────────────────────────────
+COPY requirements.txt .
+RUN pip install --upgrade pip \
+ && pip install -r requirements.txt
+
+# ── App code ──────────────────────────────────────────────────────────────────
+COPY . .
+
+# matplotlib & fontconfig scratch dirs (writable in Fargate /tmp)
+RUN mkdir -p /tmp/.matplotlib /tmp/.fontconfig && chmod 777 /tmp/.matplotlib /tmp/.fontconfig
+ENV MPLCONFIGDIR=/tmp/.matplotlib
+ENV FONTCONFIG_PATH=/tmp/.fontconfig
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+
+# Fargate entrypoint — reads FILE_EVENT env var
+ENTRYPOINT ["python", "app.py"]

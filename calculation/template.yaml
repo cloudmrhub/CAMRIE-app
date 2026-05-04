@@ -1,0 +1,258 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+
+Description: >
+  CAMRIE Calculation Infrastructure.
+  Fargate task (heavy simulation) driven by a Step Functions state machine.
+  Lambda (lightweight routing) decides whether to go straight to Fargate.
+
+Parameters:
+  StageName:
+    Type: String
+    Default: Prod
+    AllowedValues: [Prod, Dev, Test]
+
+  DataBucketPName:
+    Type: String
+    Description: S3 bucket where input data (tissue maps, sequences) are stored.
+
+  ResultsBucketPName:
+    Type: String
+    Description: S3 bucket for successful result ZIPs.
+
+  FailedBucketPName:
+    Type: String
+    Description: S3 bucket for failure bundles.
+
+  FargateImageUri:
+    Type: String
+    Description: ECR URI of the pre-built Fargate Docker image.
+
+  ECSClusterName:
+    Type: String
+    Default: camrie-cluster
+    Description: ECS cluster name (created if it does not exist).
+
+  SubnetId1:
+    Type: AWS::EC2::Subnet::Id
+    Description: First public subnet (internet access required for S3/ECR).
+
+  SubnetId2:
+    Type: AWS::EC2::Subnet::Id
+    Description: Second public subnet (high availability).
+
+  SecurityGroupIds:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Security group for ECS tasks.
+
+Resources:
+
+  # ── ECS Cluster ─────────────────────────────────────────────────────────────
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Ref ECSClusterName
+
+  # ── IAM Role for Fargate tasks ───────────────────────────────────────────────
+  FargateTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: CamrieS3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [s3:GetObject, s3:ListBucket]
+                Resource:
+                  - !Sub "arn:aws:s3:::${DataBucketPName}"
+                  - !Sub "arn:aws:s3:::${DataBucketPName}/*"
+              - Effect: Allow
+                Action: [s3:PutObject]
+                Resource:
+                  - !Sub "arn:aws:s3:::${ResultsBucketPName}/*"
+                  - !Sub "arn:aws:s3:::${FailedBucketPName}/*"
+
+  FargateTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CamrieTaskS3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [s3:GetObject, s3:ListBucket]
+                Resource:
+                  - !Sub "arn:aws:s3:::${DataBucketPName}"
+                  - !Sub "arn:aws:s3:::${DataBucketPName}/*"
+              - Effect: Allow
+                Action: [s3:PutObject]
+                Resource:
+                  - !Sub "arn:aws:s3:::${ResultsBucketPName}/*"
+                  - !Sub "arn:aws:s3:::${FailedBucketPName}/*"
+
+  # ── Fargate Task Definition ──────────────────────────────────────────────────
+  FargateTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub "camrie-task-${StageName}"
+      Cpu: "4096"       # 4 vCPU
+      Memory: "16384"   # 16 GB
+      NetworkMode: awsvpc
+      RequiresCompatibilities: [FARGATE]
+      ExecutionRoleArn: !GetAtt FargateTaskExecutionRole.Arn
+      TaskRoleArn:      !GetAtt FargateTaskRole.Arn
+      ContainerDefinitions:
+        - Name: camrie-worker
+          Image: !Ref FargateImageUri
+          Essential: true
+          Environment:
+            - Name: ResultsBucketName
+              Value: !Ref ResultsBucketPName
+            - Name: FailedBucketName
+              Value: !Ref FailedBucketPName
+            - Name: CAMRIE_THREADS
+              Value: "4"
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group:  !Ref FargateLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: camrie
+
+  FargateLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/ecs/camrie-${StageName}"
+      RetentionInDays: 30
+
+  # ── RunJobLambda (routes job → Fargate) ─────────────────────────────────────
+  RunJobLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: Launches a Fargate task to run a CAMRIE simulation job.
+      Runtime: python3.11
+      Handler: index.lambda_handler
+      Timeout: 60
+      MemorySize: 256
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: [ecs:RunTask, iam:PassRole]
+              Resource: "*"
+      Environment:
+        Variables:
+          CLUSTER_ARN:   !GetAtt ECSCluster.Arn
+          TASK_DEF_ARN:  !Ref FargateTaskDefinition
+          SUBNET_1:      !Ref SubnetId1
+          SUBNET_2:      !Ref SubnetId2
+          SECURITY_GROUP: !Ref SecurityGroupIds
+      InlineCode: |
+        import json, os, boto3
+
+        def lambda_handler(event, context):
+            ecs = boto3.client("ecs")
+            response = ecs.run_task(
+                cluster=os.environ["CLUSTER_ARN"],
+                taskDefinition=os.environ["TASK_DEF_ARN"],
+                launchType="FARGATE",
+                networkConfiguration={
+                    "awsvpcConfiguration": {
+                        "subnets": [
+                            os.environ["SUBNET_1"],
+                            os.environ["SUBNET_2"],
+                        ],
+                        "securityGroups": [os.environ["SECURITY_GROUP"]],
+                        "assignPublicIp": "ENABLED",
+                    }
+                },
+                overrides={
+                    "containerOverrides": [{
+                        "name": "camrie-worker",
+                        "environment": [
+                            {"name": "FILE_EVENT", "value": json.dumps(event)}
+                        ],
+                    }]
+                },
+            )
+            tasks = response.get("tasks", [])
+            if not tasks:
+                raise RuntimeError(f"ECS RunTask failed: {response.get('failures')}")
+            return {"taskArn": tasks[0]["taskArn"], "statusCode": 202}
+
+  # ── IAM Role for Step Functions ──────────────────────────────────────────────
+  StateMachineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: InvokeLambda
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !GetAtt RunJobLambda.Arn
+
+  # ── Step Functions state machine ─────────────────────────────────────────────
+  CalculationStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Role: !GetAtt StateMachineRole.Arn
+      Definition:
+        Comment: CAMRIE simulation job orchestrator
+        StartAt: RunJob
+        States:
+          RunJob:
+            Type: Task
+            Resource: !GetAtt RunJobLambda.Arn
+            End: true
+            Catch:
+              - ErrorEquals: ["States.ALL"]
+                ResultPath: $.error
+                Next: FailureState
+          FailureState:
+            Type: Fail
+            Comment: Job launch failed
+
+Outputs:
+  StateMachineArn:
+    Description: ARN of the CAMRIE calculation state machine
+    Value: !GetAtt CalculationStateMachine.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-StateMachineArn"
+
+  RunJobLambdaArn:
+    Description: ARN of the RunJob Lambda
+    Value: !GetAtt RunJobLambda.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-RunJobLambdaArn"
+
+  ECSClusterArn:
+    Description: ARN of the ECS cluster
+    Value: !GetAtt ECSCluster.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-ECSClusterArn"

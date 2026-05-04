@@ -1,0 +1,49 @@
+version = 0.1
+
+[default]
+[default.global.parameters]
+stack_name = "camrie-app"
+
+[default.build.parameters]
+cached = true
+parallel = true
+
+[default.validate.parameters]
+lint = true
+
+[default.deploy.parameters]
+capabilities = "CAPABILITY_IAM CAPABILITY_AUTO_EXPAND"
+confirm_changeset = false
+resolve_s3 = true
+fail_on_empty_changeset = false
+# profile is set only in local envs (prod/dev below); GitHub Actions uses OIDC
+
+# ── Production ───────────────────────────────────────────────────────────────
+[prod]
+[prod.deploy.parameters]
+stack_name      = "camrie-app-prod"
+s3_prefix       = "camrie-app-prod"
+region          = "us-east-1"
+profile         = "nyu"
+confirm_changeset = false
+capabilities    = "CAPABILITY_IAM CAPABILITY_AUTO_EXPAND CAPABILITY_NAMED_IAM"
+parameter_overrides = [
+    "StageName=Prod",
+    "CloudMRBrainStackName=cloudmrhub-brain"
+]
+tags = "App=\"CAMRIE\" Environment=\"Production\" Mode=\"mode1\""
+
+# ── Development ──────────────────────────────────────────────────────────────
+[dev]
+[dev.deploy.parameters]
+stack_name      = "camrie-app-dev"
+s3_prefix       = "camrie-app-dev"
+region          = "us-east-1"
+profile         = "nyu"
+confirm_changeset = true
+capabilities    = "CAPABILITY_IAM CAPABILITY_AUTO_EXPAND CAPABILITY_NAMED_IAM"
+parameter_overrides = [
+    "StageName=Dev",
+    "CloudMRBrainStackName=cloudmrhub-brain"
+]
+tags = "App=\"CAMRIE\" Environment=\"Development\" Mode=\"mode1\""

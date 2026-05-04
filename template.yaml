@@ -1,0 +1,85 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: |
+  CAMRIE Backend – KomaMRI simulation infrastructure.
+  Mode 1 (CloudMRHub managed) deployment.
+
+Parameters:
+  CortexHost:
+    Type: String
+    Description: CloudMR Brain API hostname
+    Default: api.cloudmrhub.com
+
+  CloudMRBrainStackName:
+    Type: String
+    Description: Name of the cloudmr-brain CloudFormation stack (for imports)
+    Default: cloudmrhub-brain
+
+  FargateImageUri:
+    Type: String
+    Description: ECR URI of the pre-built Fargate Docker image
+
+  ECSClusterName:
+    Type: String
+    Default: camrie-cluster
+    Description: ECS cluster name
+
+  SubnetId1:
+    Type: AWS::EC2::Subnet::Id
+    Description: First public subnet
+
+  SubnetId2:
+    Type: AWS::EC2::Subnet::Id
+    Description: Second public subnet
+
+  SecurityGroupIds:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Security group for ECS tasks
+
+  StageName:
+    Type: String
+    Default: Prod
+    AllowedValues: [Prod, Dev, Test]
+
+Globals:
+  Function:
+    Timeout: 60
+    MemorySize: 512
+    Architectures: [x86_64]
+    Environment:
+      Variables:
+        Application: CAMRIE
+        Host: !Ref CortexHost
+        CloudMRApiUrl: !Sub "https://${CortexHost}/api"
+        PipelineCompleted: !Sub "https://${CortexHost}/api/pipeline/completed"
+        PipelineFailed:   !Sub "https://${CortexHost}/api/pipeline/failed"
+
+Resources:
+  CalculationApp:
+    Type: AWS::Serverless::Application
+    Properties:
+      Location: calculation/template.yaml
+      Parameters:
+        StageName:          !Ref StageName
+        DataBucketPName:
+          Fn::ImportValue: !Sub "${CloudMRBrainStackName}-DataBucketName"
+        ResultsBucketPName:
+          Fn::ImportValue: !Sub "${CloudMRBrainStackName}-ResultsBucketName"
+        FailedBucketPName:
+          Fn::ImportValue: !Sub "${CloudMRBrainStackName}-FailedBucketName"
+        FargateImageUri:    !Ref FargateImageUri
+        ECSClusterName:     !Ref ECSClusterName
+        SubnetId1:          !Ref SubnetId1
+        SubnetId2:          !Ref SubnetId2
+        SecurityGroupIds:   !Ref SecurityGroupIds
+
+Outputs:
+  CalculationStateMachineArn:
+    Description: ARN of the CAMRIE calculation state machine
+    Value: !GetAtt CalculationApp.Outputs.StateMachineArn
+    Export:
+      Name: !Sub "${AWS::StackName}-StateMachineArn"
+
+  RunJobLambdaArn:
+    Description: ARN of the RunJob Lambda
+    Value: !GetAtt CalculationApp.Outputs.RunJobLambdaArn

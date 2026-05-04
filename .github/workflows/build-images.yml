@@ -1,0 +1,114 @@
+name: Build & Push Docker Image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'calculation/src/**'
+      - '.github/workflows/build-images.yml'
+  workflow_dispatch:
+
+env:
+  AWS_REGION: us-east-1
+  FARGATE_REPO: camrie-fargate
+  # makeitKOMA repo that contains the MRI pipeline (pipeline files are NOT
+  # stored in this repo — they are pulled fresh from source on every build)
+  MAKEITKOMA_REPO: cloudmrhub/makeitKOMA
+  MAKEITKOMA_REF: camrie-tools-v1
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  build-and-push:
+    name: Build & Push to ECR
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout CAMRIE-app
+        uses: actions/checkout@v4
+
+      # Pull the MRI pipeline source from the makeitKOMA repo.
+      # The two files (MRI_pipeline_dev.py → MRI_pipeline.py and
+      # simulate_batch_final.jl) are listed in .gitignore of this repo
+      # because they live in the makeitKOMA codebase.
+      - name: Checkout makeitKOMA (pipeline source)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.MAKEITKOMA_REPO }}
+          ref: ${{ env.MAKEITKOMA_REF }}
+          path: _makeitkoma
+
+      - name: Copy pipeline files into Docker build context
+        run: |
+          cp _makeitkoma/dev/MRI_pipeline_dev.py  calculation/src/MRI_pipeline.py
+          cp _makeitkoma/dev/simulate_batch_final.jl calculation/src/simulate_batch_final.jl
+          echo "Pipeline files staged for Docker build:"
+          ls -lh calculation/src/MRI_pipeline.py calculation/src/simulate_batch_final.jl
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Get AWS Account ID
+        id: account
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          echo "account_id=${ACCOUNT_ID}" >> $GITHUB_OUTPUT
+          echo "AWS Account: ${ACCOUNT_ID}"
+
+      - name: Generate image tag
+        id: meta
+        run: |
+          IMAGE_TAG="${GITHUB_SHA::8}-$(date +%Y%m%d-%H%M%S)"
+          echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+          echo "Image tag: ${IMAGE_TAG}"
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push Fargate image
+        id: build
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ steps.meta.outputs.image_tag }}
+        run: |
+          set -euo pipefail
+          cd calculation/src
+
+          FARGATE_URI="${ECR_REGISTRY}/${FARGATE_REPO}"
+
+          echo "╔═══════════════════════════════════════════════════════════╗"
+          echo "║   Building CAMRIE Fargate Image                           ║"
+          echo "╚═══════════════════════════════════════════════════════════╝"
+          echo "Registry: ${ECR_REGISTRY}"
+          echo "Tag:      ${IMAGE_TAG}"
+          echo ""
+
+          # --provenance=false avoids multi-platform manifests that break ECR/ECS
+          docker build --provenance=false \
+            -f DockerfileFargate \
+            -t ${FARGATE_REPO}:${IMAGE_TAG} .
+
+          docker tag ${FARGATE_REPO}:${IMAGE_TAG} ${FARGATE_URI}:${IMAGE_TAG}
+          docker tag ${FARGATE_REPO}:${IMAGE_TAG} ${FARGATE_URI}:latest
+
+          docker push ${FARGATE_URI}:${IMAGE_TAG}
+          docker push ${FARGATE_URI}:latest
+
+          echo "fargate_image_uri=${FARGATE_URI}:latest" >> $GITHUB_OUTPUT
+          echo ""
+          echo "✓ Image pushed: ${FARGATE_URI}:latest"
+
+      - name: Build Summary
+        run: |
+          echo "╔═══════════════════════════════════════════════════════════╗"
+          echo "║   Build Complete                                          ║"
+          echo "╚═══════════════════════════════════════════════════════════╝"
+          echo "Fargate: ${{ steps.build.outputs.fargate_image_uri }}"
+          echo ""
+          echo "Deploy workflow will pick up :latest automatically."
