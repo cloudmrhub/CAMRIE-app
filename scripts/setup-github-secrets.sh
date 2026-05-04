@@ -93,7 +93,10 @@ CLOUDMR_API_HOST=$($AWS_CMD cloudformation describe-stacks \
   --output text 2>/dev/null || echo "api.cloudmrhub.com")
 
 [ -z "$CLOUDMR_API_HOST" ] || [ "$CLOUDMR_API_HOST" = "None" ] && \
-  CLOUDMR_API_HOST="brain.aws.cloudmrhub.com/Prod"
+  CLOUDMR_API_HOST="f41j488v7j.execute-api.us-east-1.amazonaws.com"
+
+# Append /Prod stage if not already present
+[[ "$CLOUDMR_API_HOST" != */Prod* ]] && CLOUDMR_API_HOST="${CLOUDMR_API_HOST}/Prod"
 
 CLOUDMR_API_URL="https://${CLOUDMR_API_HOST}"
 echo "    ${CLOUDMR_API_URL}"
@@ -118,7 +121,7 @@ else
 fi
 
 echo "    Verifying and obtaining token…"
-LOGIN=$(curl -s -X POST "${CLOUDMR_API_URL}/auth/login" \
+LOGIN=$(curl -s -X POST "${CLOUDMR_API_URL}/api/auth/login" \
   -H "Content-Type: application/json" \
   -d "{\"email\":\"${CLOUDMR_ADMIN_EMAIL}\",\"password\":\"${CLOUDMR_ADMIN_PASSWORD}\"}")
 TOKEN=$(echo "$LOGIN" | jq -r '.id_token // .idToken // .access_token // empty' 2>/dev/null || true)

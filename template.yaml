@@ -8,7 +8,7 @@ Parameters:
   CortexHost:
     Type: String
     Description: CloudMR Brain API hostname
-    Default: api.cloudmrhub.com
+    Default: f41j488v7j.execute-api.us-east-1.amazonaws.com
 
   CloudMRBrainStackName:
     Type: String

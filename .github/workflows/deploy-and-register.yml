@@ -161,7 +161,7 @@ jobs:
             --resolve-s3 \
             --parameter-overrides \
               FargateImageUri=${{ steps.images.outputs.fargate_image_uri }} \
-              CortexHost=${{ secrets.CLOUDMR_API_HOST || 'api.cloudmrhub.com' }} \
+              CortexHost=${{ secrets.CLOUDMR_API_HOST || 'f41j488v7j.execute-api.us-east-1.amazonaws.com' }} \
               CloudMRBrainStackName=${{ env.CLOUDMR_BRAIN_STACK }} \
               ECSClusterName=${{ env.STACK_NAME }}-cluster \
               SubnetId1=${{ secrets.SUBNET_ID_1 }} \
