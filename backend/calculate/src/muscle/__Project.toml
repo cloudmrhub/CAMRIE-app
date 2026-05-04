@@ -1,8 +1,0 @@
-[deps]
-KomaNYU = "uuid"
-FileIO = "uuid"
-JLD2 = "uuid"
-NIfTI = "uuid"
-NPZ = "uuid"
-JSON = "uuid"
-Printf = "uuid"

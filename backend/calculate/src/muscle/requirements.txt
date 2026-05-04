@@ -1,5 +1,0 @@
-numpy
-boto3
-requests
-jsonpickle
-pip
