@@ -7,10 +7,14 @@ not inside Docker.  Results are written to ./local_out/ instead of S3.
 
 Usage
 -----
-  conda run -n koma python local_test.py [event.json]
+  # Easiest — use the test runner which also builds the phantom:
+  cd calculation && ./run_local_test.sh --seq /path/to/epi.seq
 
-The event.json must live alongside this file (or pass a path as arg).
-Set  "type": "local"  in the file descriptors and point  "local_path"
+  # Direct call (phantom and event.json must already be ready):
+  conda run -n koma python src/local_test.py [event.json]
+
+The event.json file lives in  calculation/event.json.
+Set  "type": "local"  in the file descriptors and  "local_path"
 to your actual files on disk — no S3 upload needed.
 
 Results land in  calculation/local_out/  (or set LOCAL_RESULTS_DIR env var).

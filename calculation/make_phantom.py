@@ -18,12 +18,18 @@ value.  Three NIfTI files are written:
 
 Usage
 -----
+  # Easiest — called automatically by the test runner:
+  ./run_local_test.sh
+  ./run_local_test.sh --voxel-mm 1.0 --inner-t1 950
+
+  # Standalone:
   python make_phantom.py                    # defaults
   python make_phantom.py --out-dir /tmp/ph  # custom output dir
   python make_phantom.py --voxel-mm 1.0     # finer resolution
   python make_phantom.py --help
 
-These files can be dropped straight into event.json as "type":"local" entries.
+The generated files are referenced automatically in event.json and
+can also be used directly as  "type":"local"  entries.
 """
 
 import argparse
