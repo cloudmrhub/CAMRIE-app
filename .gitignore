@@ -3,6 +3,12 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# Local dev — pipeline outputs and temp data
+calculation/local_out/
+calculation/src/MRI_pipeline.py
+calculation/src/simulate_batch_final.jl
+
+
 # C extensions
 *.so
 

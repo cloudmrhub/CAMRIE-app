@@ -1,0 +1,43 @@
+{
+    "pipeline": "local-test-001",
+    "token": "local-token",
+    "user_id": "local-user",
+    "task": {
+        "options": {
+            "rho": {
+                "type": "local",
+                "local_path": "/path/to/rho.nii.gz",
+                "filename": "rho.nii.gz"
+            },
+            "t1": {
+                "type": "local",
+                "local_path": "/path/to/t1.nii.gz",
+                "filename": "t1.nii.gz"
+            },
+            "t2": {
+                "type": "local",
+                "local_path": "/path/to/t2.nii.gz",
+                "filename": "t2.nii.gz"
+            },
+            "sequence": {
+                "type": "local",
+                "local_path": "/path/to/sequence.seq",
+                "filename": "sequence.seq"
+            },
+            "geometry": {
+                "isocenter_mm": null,
+                "slice_normal": [0, 0, 1],
+                "num_slices": 5,
+                "slice_thickness_mm": null,
+                "slice_gap_mm": 0.0
+            },
+            "simulation": {
+                "b0": 3.0,
+                "spin_factor": 1,
+                "n_threads": 4,
+                "use_gpu": false,
+                "apply_hamming": true
+            }
+        }
+    }
+}

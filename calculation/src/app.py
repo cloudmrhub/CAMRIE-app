@@ -104,8 +104,24 @@ def parse_s3_url(url):
 
 
 def download_from_s3(file_info, s3=None):
-    """Download a file described by file_info dict.  Returns local path string."""
+    """Resolve a file descriptor to a local path.
+
+    Supported descriptor types:
+      "local"       – file is already on disk; use local_path directly (no copy)
+      "s3"          – download from S3 bucket/key
+      "presigned"   – download via presigned GET URL
+    """
     filename = file_info["filename"]
+
+    # ── local shortcut (dev / testing) ────────────────────────────────────────
+    if file_info.get("type") == "local":
+        local_path = file_info.get("local_path", filename)
+        if not Path(local_path).exists():
+            raise FileNotFoundError(f"local_path not found: {local_path}")
+        logger.write(f"Using local file: {local_path}")
+        file_info["filename"] = str(local_path)
+        return str(local_path)
+
     local_path = pick_random_path(suffix=Path(filename).suffix)
 
     if "presigned_url" in file_info:
