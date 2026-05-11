@@ -6,18 +6,18 @@
         "options": {
             "rho": {
                 "type": "local",
-                "local_path": "/path/to/rho.nii.gz",
-                "filename": "rho.nii.gz"
+                "local_path": "phantom/rho.nii",
+                "filename": "rho.nii"
             },
             "t1": {
                 "type": "local",
-                "local_path": "/path/to/t1.nii.gz",
-                "filename": "t1.nii.gz"
+                "local_path": "phantom/t1.nii",
+                "filename": "t1.nii"
             },
             "t2": {
                 "type": "local",
-                "local_path": "/path/to/t2.nii.gz",
-                "filename": "t2.nii.gz"
+                "local_path": "phantom/t2.nii",
+                "filename": "t2.nii"
             },
             "sequence": {
                 "type": "local",

@@ -5,6 +5,7 @@ __pycache__/
 
 # Local dev — pipeline outputs and temp data
 calculation/local_out/
+calculation/phantom/
 calculation/src/MRI_pipeline.py
 calculation/src/simulate_batch_final.jl
 
