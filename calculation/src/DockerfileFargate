@@ -20,7 +20,14 @@ RUN wget -q https://julialang-s3.julialang.org/bin/linux/x64/1.11/julia-${JULIA_
 
 # ── Pre-install Julia packages (cached layer) ─────────────────────────────────
 COPY install_julia_deps.jl /tmp/install_julia_deps.jl
-RUN julia /tmp/install_julia_deps.jl
+# Use a stable TMPDIR so precompile artefacts don't reference /tmp/... paths
+# that vanish between build steps.  The verify step runs a fresh julia session
+# which would fail if the cache is broken, catching the problem at build time.
+RUN mkdir -p /root/.julia/tmp && \
+    TMPDIR=/root/.julia/tmp julia /tmp/install_julia_deps.jl && \
+    echo "Verifying precompile cache in fresh session..." && \
+    TMPDIR=/root/.julia/tmp julia -e 'using KomaMRI; println("Precompile verified OK")' && \
+    rm -rf /root/.julia/tmp
 
 # ── Python deps ───────────────────────────────────────────────────────────────
 COPY requirements.txt .

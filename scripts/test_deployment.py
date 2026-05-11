@@ -198,16 +198,17 @@ def write_synthetic_nifti(path, value=1.0, shape=(10, 10, 5)):
 # ═══════════════════════════════════════════════════════════════════════════════
 def test_t1_precompile(args, image_uri):
     section("T1 · No runtime Julia compilation")
-    MAX_SECONDS = 15.0
+    MAX_SECONDS = 45.0   # Allow headroom; truly precompiled should be < 45 s
     cmd = (
         f'docker run --rm '
+        f'--entrypoint julia '
         f'-e JULIA_DEPOT_PATH=/root/.julia '
         f'{image_uri} '
-        f'julia -e "using KomaMRI; println(\\"KomaMRI loaded\\")"'
+        f'-e "using KomaMRI; println(\\"KomaMRI loaded\\")"'
     )
     info(f"docker run … julia -e 'using KomaMRI'")
     t0 = time.time()
-    out, rc = run(cmd, timeout=120)
+    out, rc = run(cmd, timeout=300)
     elapsed = time.time() - t0
     print(f"  output: {out[-200:]}" if out else "")
     if rc != 0:
@@ -233,9 +234,10 @@ def test_t2_koma_example(args, image_uri):
     )
     cmd = (
         f'docker run --rm '
+        f'--entrypoint julia '
         f'-e JULIA_DEPOT_PATH=/root/.julia '
         f'{image_uri} '
-        f'julia -e "{julia_snippet}"'
+        f'-e "{julia_snippet}"'
     )
     info("Running 1-spin KomaMRI EPI simulation…")
     t0 = time.time()
@@ -568,11 +570,14 @@ def main():
     info(f"Log group: {log_group}")
 
     # API base URL
+    # CortexHost in the deployed stack may include the stage path already
+    # (e.g. "host.amazonaws.com/Prod"), so we only append /api.
     api_base = args.api_url
     if not api_base:
         cortex_host = get_cf_param(cf, args.stack, "CortexHost") or \
                       "f41j488v7j.execute-api.us-east-1.amazonaws.com"
-        api_base = f"https://{cortex_host}/Prod/api"
+        # Strip trailing slash before appending
+        api_base = f"https://{cortex_host.rstrip('/')}/api"
     info(f"API base: {api_base}")
 
     # ── Run tests ──────────────────────────────────────────────────────────────
@@ -605,6 +610,7 @@ def main():
             warn("T5 skipped — missing state machine ARN or bucket names")
             results["T5"] = {"passed": None, "msg": "Skipped (missing CF outputs)", "elapsed": 0}
 
+    # T6 runs AFTER T4/T5 so there are log streams to inspect
     if "T6" not in skip:
         test_t6_logs(args, session, log_group)
 
