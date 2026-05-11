@@ -39,6 +39,7 @@ jobs:
           repository: ${{ env.MAKEITKOMA_REPO }}
           ref: ${{ env.MAKEITKOMA_REF }}
           path: _makeitkoma
+          token: ${{ secrets.GH_PAT }}
 
       - name: Copy pipeline files into Docker build context
         run: |
