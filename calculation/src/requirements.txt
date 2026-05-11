@@ -15,6 +15,5 @@ pypulseq
 # vtk (optional, used by some helpers)
 vtk
 
-# CloudMR utilities
-pynico_eros_montin @ git+https://github.com/erosmontin/pynico.git
+# CloudMR utilities (pynico-eros-montin is brought in by cmtools@v2)
 cmtools @ git+https://github.com/cloudmrhub/cloudmr-tools.git
