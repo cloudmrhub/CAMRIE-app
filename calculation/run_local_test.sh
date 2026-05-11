@@ -19,11 +19,13 @@
 #
 # What it does
 # ------------
-#   1. Check 'koma' conda env and required pipeline files are present
-#   2. (Re)generate the concentric-cylinder NIfTI phantom
-#   3. Patch event.json with the chosen sequence path
-#   4. Run  src/local_test.py  via conda run -n koma
-#   5. Print location of results ZIP
+#   1. Check 'koma' conda env is present
+#   2. Auto-copy MRI_pipeline.py + simulate_batch_final.jl from
+#      /data/PROJECTS/makeitKOMA/dev/  (if not already in src/)
+#   3. (Re)generate the concentric-cylinder NIfTI phantom
+#   4. Patch event.json with the chosen sequence path
+#   5. Run  src/local_test.py  via conda run -n koma
+#   6. Print location of results ZIP
 # =============================================================================
 
 set -euo pipefail
@@ -74,6 +76,9 @@ fail() { echo "  ✗  $*" >&2; exit 1; }
 info() { echo "  →  $*"; }
 section() { echo; echo "── $* ──────────────────────────────────────────"; }
 
+# Known local checkout of makeitKOMA (used for auto-copy below)
+MAKEITKOMA_DEV="/data/PROJECTS/makeitKOMA/dev"
+
 # ── 1. Environment checks ─────────────────────────────────────────────────────
 section "Checking environment"
 
@@ -81,17 +86,32 @@ conda info --envs 2>/dev/null | grep -q "^koma " \
     || fail "'koma' conda environment not found.  Create it first."
 ok "conda env 'koma' found"
 
-[[ -f "${PIPELINE_PY}" ]] \
-    || fail "MRI_pipeline.py not found at ${PIPELINE_PY}
-       Copy it from makeitKOMA:
+# Auto-copy pipeline files from the local makeitKOMA checkout if missing
+if [[ ! -f "${PIPELINE_PY}" ]]; then
+    if [[ -f "${MAKEITKOMA_DEV}/MRI_pipeline_dev.py" ]]; then
+        cp "${MAKEITKOMA_DEV}/MRI_pipeline_dev.py" "${PIPELINE_PY}"
+        ok "Auto-copied MRI_pipeline.py from ${MAKEITKOMA_DEV}"
+    else
+        fail "MRI_pipeline.py not found at ${PIPELINE_PY}
+       Copy it manually:
          cp /path/to/makeitKOMA/dev/MRI_pipeline_dev.py ${PIPELINE_PY}"
-ok "MRI_pipeline.py present"
+    fi
+else
+    ok "MRI_pipeline.py present"
+fi
 
-[[ -f "${PIPELINE_JL}" ]] \
-    || fail "simulate_batch_final.jl not found at ${PIPELINE_JL}
-       Copy it from makeitKOMA:
+if [[ ! -f "${PIPELINE_JL}" ]]; then
+    if [[ -f "${MAKEITKOMA_DEV}/simulate_batch_final.jl" ]]; then
+        cp "${MAKEITKOMA_DEV}/simulate_batch_final.jl" "${PIPELINE_JL}"
+        ok "Auto-copied simulate_batch_final.jl from ${MAKEITKOMA_DEV}"
+    else
+        fail "simulate_batch_final.jl not found at ${PIPELINE_JL}
+       Copy it manually:
          cp /path/to/makeitKOMA/dev/simulate_batch_final.jl ${PIPELINE_JL}"
-ok "simulate_batch_final.jl present"
+    fi
+else
+    ok "simulate_batch_final.jl present"
+fi
 
 # ── 2. Phantom ────────────────────────────────────────────────────────────────
 section "Phantom"

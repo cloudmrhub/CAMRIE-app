@@ -21,12 +21,16 @@
             },
             "sequence": {
                 "type": "local",
-                "local_path": "/path/to/sequence.seq",
-                "filename": "sequence.seq"
+                "local_path": "/data/ARTICLES/bodymodelscreation/tse_ETL1_T1w.seq",
+                "filename": "tse_ETL1_T1w.seq"
             },
             "geometry": {
                 "isocenter_mm": null,
-                "slice_normal": [0, 0, 1],
+                "slice_normal": [
+                    0,
+                    0,
+                    1
+                ],
                 "num_slices": 5,
                 "slice_thickness_mm": null,
                 "slice_gap_mm": 0.0
