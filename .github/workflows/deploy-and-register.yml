@@ -191,6 +191,23 @@ jobs:
             --no-confirm-changeset \
             --no-fail-on-empty-changeset
 
+      - name: Dump nested stack events on failure
+        if: failure()
+        run: |
+          NESTED=$(aws cloudformation list-stacks \
+            --region ${{ env.AWS_REGION }} \
+            --stack-status-filter UPDATE_ROLLBACK_COMPLETE UPDATE_ROLLBACK_FAILED \
+            --query "StackSummaries[?starts_with(StackName,'${{ env.STACK_NAME }}-CalculationApp')].StackName" \
+            --output text 2>/dev/null | head -1)
+          if [ -n "$NESTED" ]; then
+            echo "=== CloudFormation events for $NESTED ==="
+            aws cloudformation describe-stack-events \
+              --region ${{ env.AWS_REGION }} \
+              --stack-name "$NESTED" \
+              --query "StackEvents[?ResourceStatus=='CREATE_FAILED'||ResourceStatus=='UPDATE_FAILED'][LogicalResourceId,ResourceStatusReason]" \
+              --output table
+          fi
+
       - name: Get Stack Outputs
         id: outputs
         run: |
