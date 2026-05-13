@@ -273,8 +273,6 @@ Resources:
               Value: !Ref FailedBucketPName
             - Name: CAMRIE_THREADS
               Value: "4"
-            - Name: NVIDIA_VISIBLE_DEVICES
-              Value: all
           LogConfiguration:
             LogDriver: awslogs
             Options:
