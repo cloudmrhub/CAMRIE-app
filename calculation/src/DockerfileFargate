@@ -1,6 +1,6 @@
 # ==============================================================================
 #  CAMRIE Fargate image
-#  Python 3.11 + Julia 1.10 + KomaMRI precompiled
+#  Python 3.11 + Julia 1.11 + KomaMRI precompiled
 # ==============================================================================
 FROM python:3.11-slim
 
@@ -18,16 +18,23 @@ RUN wget -q https://julialang-s3.julialang.org/bin/linux/x64/1.11/julia-${JULIA_
  && tar -xzf julia-${JULIA_VERSION}-linux-x86_64.tar.gz -C /usr/local --strip-components=1 \
  && rm julia-${JULIA_VERSION}-linux-x86_64.tar.gz
 
-# ── Pre-install Julia packages (cached layer) ─────────────────────────────────
-COPY install_julia_deps.jl /tmp/install_julia_deps.jl
-# Disable native shared-library package images (avoids lld linking issues in
-# Docker).  Classic .ji precompile loads in ~20-30 s, well within Fargate limits.
-# The second julia call verifies the cache works in a fresh session; if broken
-# the Docker build will fail here rather than at runtime.
+# ── Julia environment ────────────────────────────────────────────────────────
+# Fixed depot path (not ~/.julia) so it's reliable across container restarts.
+ENV JULIA_DEPOT_PATH=/opt/julia-depot
+
+# Multi-target CPU codegen: the build host (GitHub Actions) likely differs from
+# Fargate hardware.  Without this Julia precompiles only for the build CPU and
+# the cache is invalidated at runtime on a different µarch → full recompile.
+ENV JULIA_CPU_TARGET="generic;sandybridge,-xsaveopt,clone_all;haswell,clone_all"
+
+# Disable native shared-library package images (.so) to avoid linker issues in
+# Docker slim images.  Classic .ji precompile caches are portable and load in
+# ~20-30 s — well within Fargate startup limits.
 ENV JULIA_PKG_DISABLE_PKGIMAGES=true
-RUN julia /tmp/install_julia_deps.jl && \
-    echo "Verifying precompile cache in a fresh Julia session..." && \
-    julia -e 'using KomaMRI; println("Precompile verified OK")'
+
+# ── Pre-install Julia packages (cached layer) ────────────────────────────────
+COPY install_julia_deps.jl /tmp/install_julia_deps.jl
+RUN julia /tmp/install_julia_deps.jl
 
 # ── Python deps ───────────────────────────────────────────────────────────────
 COPY requirements.txt .
@@ -36,6 +43,10 @@ RUN pip install --upgrade pip \
 
 # ── App code ──────────────────────────────────────────────────────────────────
 COPY . .
+
+# Verify precompile cache survives COPY (catches stale-cache issues at build
+# time rather than at runtime).
+RUN julia -e 'using KomaMRI, NPZ, JSON, HDF5; println("Post-COPY precompile OK")'
 
 # matplotlib & fontconfig scratch dirs (writable in Fargate /tmp)
 RUN mkdir -p /tmp/.matplotlib /tmp/.fontconfig && chmod 777 /tmp/.matplotlib /tmp/.fontconfig
