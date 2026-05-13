@@ -172,24 +172,11 @@ Resources:
             Principal:
               Service: ec2.amazonaws.com
             Action: sts:AssumeRole
+      # Only the two AWS-managed policies needed to register the instance with ECS.
+      # S3 access for simulation data is handled by FargateTaskRole on the container.
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role
         - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
-      Policies:
-        - PolicyName: CamrieEC2S3Access
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action: [s3:GetObject, s3:ListBucket]
-                Resource:
-                  - !Sub "arn:aws:s3:::${DataBucketPName}"
-                  - !Sub "arn:aws:s3:::${DataBucketPName}/*"
-              - Effect: Allow
-                Action: [s3:PutObject]
-                Resource:
-                  - !Sub "arn:aws:s3:::${ResultsBucketPName}/*"
-                  - !Sub "arn:aws:s3:::${FailedBucketPName}/*"
 
   EC2InstanceProfile:
     Type: AWS::IAM::InstanceProfile
@@ -262,8 +249,11 @@ Resources:
   GpuTaskDefinition:
     Type: AWS::ECS::TaskDefinition
     Condition: GpuEnabled
+    DependsOn: GpuLogGroup
     Properties:
       Family: !Sub "camrie-gpu-task-${StageName}"
+      Cpu: "4096"        # 4 vCPU  (task level, consistent with Fargate task)
+      Memory: "14000"   # 14 GB   (task level)
       NetworkMode: awsvpc
       RequiresCompatibilities: [EC2]
       ExecutionRoleArn: !GetAtt FargateTaskExecutionRole.Arn
@@ -275,8 +265,7 @@ Resources:
           ResourceRequirements:
             - Type: GPU
               Value: "1"
-          Memory: 14000
-          Cpu: 4096
+          MemoryReservation: 12000  # soft limit; hard cap is task-level Memory
           Environment:
             - Name: ResultsBucketName
               Value: !Ref ResultsBucketPName
