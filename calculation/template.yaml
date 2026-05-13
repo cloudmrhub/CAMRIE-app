@@ -321,8 +321,9 @@ Resources:
             ecs = boto3.client("ecs")
             s3  = boto3.client("s3")
 
-            # Detect GPU request from simulation options
-            opts    = event.get("options", {}) if isinstance(event, dict) else {}
+            # Detect GPU request — brain API wraps payload under event["task"]
+            task    = event.get("task", event) if isinstance(event, dict) else {}
+            opts    = task.get("options", {}) if isinstance(task, dict) else {}
             sim     = opts.get("simulation", {}) if isinstance(opts, dict) else {}
             use_gpu = str(sim.get("use_gpu", False)).lower() in ("true", "1", "yes")
 
