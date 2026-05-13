@@ -108,7 +108,7 @@ Resources:
                   - !Sub "arn:aws:s3:::${ResultsBucketPName}/*"
                   - !Sub "arn:aws:s3:::${FailedBucketPName}/*"
 
-  # ── Fargate Task Definition (GPU-enabled) ────────────────────────────────────
+  # ── Fargate Task Definition ──────────────────────────────────────────────────
   FargateTaskDefinition:
     Type: AWS::ECS::TaskDefinition
     Properties:
@@ -126,9 +126,6 @@ Resources:
         - Name: camrie-worker
           Image: !Ref FargateImageUri
           Essential: true
-          ResourceRequirements:
-            - Type: GPU
-              Value: "1"      # 1× NVIDIA T4 (16 GB VRAM)
           Environment:
             - Name: ResultsBucketName
               Value: !Ref ResultsBucketPName
@@ -136,8 +133,6 @@ Resources:
               Value: !Ref FailedBucketPName
             - Name: CAMRIE_THREADS
               Value: "4"
-            - Name: NVIDIA_VISIBLE_DEVICES
-              Value: all
           LogConfiguration:
             LogDriver: awslogs
             Options:
