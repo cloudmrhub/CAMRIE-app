@@ -227,9 +227,9 @@ def do_process(event, context=None, s3=None):
         apply_hamming = bool(sim.get("apply_hamming", True))
         spins_per_voxel  = int(sim.get("spins_per_voxel", 0))
         spin_method      = sim.get("spin_method", pipeline.DEFAULT_SPIN_METHOD)
-        t2star_factor    = float(sim.get("t2star_factor", 1.0))
         parallel_slices  = int(sim.get("parallel_slices", 4))
         slice_padding    = float(sim.get("slice_padding", 1.0))
+        t2star_factor    = float(sim.get("t2star_factor", 1.0))
 
         # ── 6. Output directory ─────────────────────────────────────────────
         out_base = create_random_temp_dir()

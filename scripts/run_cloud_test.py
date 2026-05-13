@@ -20,6 +20,7 @@ import argparse
 import hashlib
 import json
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -168,7 +169,67 @@ def queue_job(base_url, token, file_keys, sim_config):
     return r.json()
 
 
-def poll_pipeline(base_url, token, pipeline_id, timeout=600, interval=15):
+def start_log_tail(log_group, aws_profile, aws_region, since="1m"):
+    """Start a background process that tails CloudWatch logs."""
+    cmd = [
+        "aws", "logs", "tail", log_group,
+        "--follow",
+        "--since", since,
+        "--profile", aws_profile,
+        "--region", aws_region,
+        "--format", "short",
+    ]
+    info(f"Tailing logs: {log_group} (Ctrl+C to stop)")
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        return proc
+    except FileNotFoundError:
+        fail("AWS CLI not found — cannot tail logs. Install aws-cli or use --no-poll.")
+        return None
+
+
+def stream_log_lines(proc, max_lines=None):
+    """Read and print available lines from the log tail process (non-blocking)."""
+    import select
+    count = 0
+    while True:
+        ready, _, _ = select.select([proc.stdout], [], [], 0.1)
+        if not ready:
+            break
+        line = proc.stdout.readline()
+        if not line:
+            break
+        print(f"    {line.rstrip()}")
+        count += 1
+        if max_lines and count >= max_lines:
+            break
+    return count
+
+
+def tail_logs_blocking(log_group, aws_profile, aws_region, task_id=None):
+    """Tail CloudWatch logs until interrupted. Optionally filter by task ID."""
+    cmd = [
+        "aws", "logs", "tail", log_group,
+        "--follow",
+        "--since", "5m",
+        "--profile", aws_profile,
+        "--region", aws_region,
+        "--format", "short",
+    ]
+    if task_id:
+        # Filter to a specific task's log stream
+        cmd.extend(["--log-stream-name-prefix", f"camrie/camrie-worker/{task_id}"])
+
+    info(f"Tailing logs: {log_group}" + (f" (task {task_id})" if task_id else ""))
+    info("Press Ctrl+C to stop")
+    try:
+        subprocess.run(cmd, check=False)
+    except KeyboardInterrupt:
+        print()
+
+
+def poll_pipeline(base_url, token, pipeline_id, timeout=600, interval=15,
+                  log_proc=None):
     """Poll pipeline status until completed, failed, or timeout."""
     headers = {"Authorization": f"Bearer {token}"}
     t0 = time.time()
@@ -177,18 +238,39 @@ def poll_pipeline(base_url, token, pipeline_id, timeout=600, interval=15):
             r = requests.get(f"{base_url}/pipeline/{pipeline_id}", headers=headers)
             if r.status_code == 200:
                 data = r.json()
-                # API may return a list, dict, bool, or other types
-                if isinstance(data, list):
-                    data = data[0] if data else {}
+                # API returns [bool, pipeline_dict] via get_pipeline() → with_handler
+                # Handle: [True, {...}], [{...}], {...}, True, etc.
+                if isinstance(data, list) and len(data) == 2 and isinstance(data[0], bool):
+                    # [True, {pipeline}] or [False, {error}]
+                    if data[0] and isinstance(data[1], dict):
+                        data = data[1]
+                    else:
+                        elapsed = time.time() - t0
+                        info(f"[{elapsed:.0f}s] Pipeline lookup failed: {data[1]}")
+                        time.sleep(interval)
+                        continue
+                elif isinstance(data, list) and len(data) >= 1 and isinstance(data[0], dict):
+                    data = data[0]
+                elif isinstance(data, list) and len(data) == 1 and isinstance(data[0], list):
+                    # [[{...}, {...}]] — list of pipelines wrapped
+                    items = data[0]
+                    data = items[0] if items else {}
                 if not isinstance(data, dict):
                     elapsed = time.time() - t0
-                    info(f"[{elapsed:.0f}s] Unexpected response type ({type(data).__name__}): {data}")
+                    info(f"[{elapsed:.0f}s] Unexpected response: {str(data)[:100]}")
+                    if log_proc:
+                        stream_log_lines(log_proc)
                     time.sleep(interval)
                     continue
                 status = data.get("status", "unknown")
                 elapsed = time.time() - t0
                 info(f"[{elapsed:.0f}s] Pipeline status: {status}")
                 if status in ("completed", "failed"):
+                    if log_proc:
+                        # Drain remaining log lines
+                        time.sleep(2)
+                        stream_log_lines(log_proc)
+                        log_proc.terminate()
                     return data
             else:
                 elapsed = time.time() - t0
@@ -196,6 +278,9 @@ def poll_pipeline(base_url, token, pipeline_id, timeout=600, interval=15):
         except Exception as e:
             elapsed = time.time() - t0
             info(f"[{elapsed:.0f}s] Poll error: {e} — retrying…")
+        # Stream log lines between polls
+        if log_proc:
+            stream_log_lines(log_proc)
         time.sleep(interval)
     fail(f"Timeout after {timeout}s")
     return None
@@ -211,7 +296,8 @@ def main():
     parser.add_argument("--api-pass", default=None, help="CloudMR password (if no --token)")
     parser.add_argument("--phantom-dir", default="calculation/phantom",
                         help="Directory with rho.nii, t1.nii, t2.nii")
-    parser.add_argument("--seq-file", required=True, help="Path to Pulseq .seq file")
+    parser.add_argument("--seq-file", required=False, default=None,
+                        help="Path to Pulseq .seq file (not needed with --logs-only)")
     parser.add_argument("--alias", default="Cloud Test – Cylindrical Phantom",
                         help="Pipeline alias")
 
@@ -229,7 +315,32 @@ def main():
     parser.add_argument("--no-poll", action="store_true",
                         help="Submit and exit without polling")
 
+    # AWS / log options
+    parser.add_argument("--aws-profile", default="nyu",
+                        help="AWS CLI profile for log tailing (default: nyu)")
+    parser.add_argument("--aws-region", default="us-east-1",
+                        help="AWS region (default: us-east-1)")
+    parser.add_argument("--log-group", default="/ecs/camrie-Prod",
+                        help="CloudWatch log group (default: /ecs/camrie-Prod)")
+    parser.add_argument("--tail-logs", action="store_true",
+                        help="Tail Fargate CloudWatch logs while polling")
+    parser.add_argument("--logs-only", default=None, metavar="TASK_ID",
+                        help="Skip upload/submit — just tail logs for a Fargate task ID "
+                             "(e.g. 74f378a959ff4ba4be598326ef73cf13)")
+
     args = parser.parse_args()
+
+    # ── Logs-only mode ─────────────────────────────────────────────────────
+    if args.logs_only:
+        tail_logs_blocking(args.log_group, args.aws_profile, args.aws_region,
+                           task_id=args.logs_only)
+        return
+
+    # Validate --seq-file is provided for normal mode
+    if not args.seq_file:
+        fail("--seq-file is required (unless using --logs-only)")
+        sys.exit(1)
+
     phantom_dir = Path(args.phantom_dir)
 
     # Validate files
@@ -293,8 +404,15 @@ def main():
 
     # ── Step 4: Poll ───────────────────────────────────────────────────────────
     print(f"\n═══ Step 4: Polling (timeout={args.timeout}s) ═══")
+
+    log_proc = None
+    if args.tail_logs:
+        log_proc = start_log_tail(args.log_group, args.aws_profile, args.aws_region,
+                                  since="30s")
+
     final = poll_pipeline(args.api_base, token, pipeline_id,
-                          timeout=args.timeout, interval=15)
+                          timeout=args.timeout, interval=15,
+                          log_proc=log_proc)
     if final:
         status = final.get("status", "unknown")
         if status == "completed":
@@ -305,6 +423,8 @@ def main():
             fail(f"Simulation ended with status: {status}")
             if final.get("log"):
                 info(f"Log: {final['log']}")
+    if log_proc and log_proc.poll() is None:
+        log_proc.terminate()
     print()
 
 
