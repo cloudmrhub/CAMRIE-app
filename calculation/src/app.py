@@ -382,6 +382,18 @@ def handler(event, context, s3=None):
 # Fargate / Step Functions entry point
 # ---------------------------------------------------------------------------
 
+def _load_event_from_s3(pointer):
+    """Download the real event JSON from S3 when the Lambda stored it there
+    to avoid the 8192-char ECS containerOverrides limit."""
+    import boto3
+    bucket = pointer["s3_event_bucket"]
+    key    = pointer["s3_event_key"]
+    print(f"Loading event from s3://{bucket}/{key}")
+    s3 = boto3.client("s3")
+    obj = s3.get_object(Bucket=bucket, Key=key)
+    return json.loads(obj["Body"].read().decode("utf-8"))
+
+
 def main():
     event_str = os.environ.get("FILE_EVENT")
     if not event_str:
@@ -390,6 +402,10 @@ def main():
 
     try:
         event = json.loads(event_str)
+        # If the Lambda stored the real event in S3 (payload too large),
+        # FILE_EVENT contains {"s3_event_bucket": ..., "s3_event_key": ...}
+        if "s3_event_bucket" in event and "s3_event_key" in event:
+            event = _load_event_from_s3(event)
     except Exception as e:
         print(f"Invalid JSON in FILE_EVENT: {e}")
         sys.exit(1)

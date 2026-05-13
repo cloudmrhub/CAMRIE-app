@@ -1,0 +1,701 @@
+{
+	"info": {
+		"_postman_id": "camrie-cloudmr-brain-2026",
+		"name": "CAMRIE – CloudMR Brain",
+		"description": "End-to-end flow for scheduling a CAMRIE MRI simulation via the CloudMR Brain API.\n\n## Flow\n1. **Login** → get `id_token`\n2. **Upload files** (rho, t1, t2, sequence) via multipart upload\n3. **Queue Job** → submit the simulation task\n4. **Poll Pipeline** → check status until completed/failed\n\n## Variables\nSet `email`, `password`, and optionally `api_base` in the collection variables before running.",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"variable": [
+		{
+			"key": "api_base",
+			"value": "https://brain.aws.cloudmrhub.com/Prod/api",
+			"type": "string"
+		},
+		{
+			"key": "email",
+			"value": "your-email@example.com",
+			"type": "string"
+		},
+		{
+			"key": "password",
+			"value": "your-password",
+			"type": "string"
+		},
+		{
+			"key": "id_token",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "user_id",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "data_bucket",
+			"value": "cloudmr-data-cloudmrhub-brain-us-east-1",
+			"type": "string"
+		},
+		{
+			"key": "rho_s3_key",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "t1_s3_key",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "t2_s3_key",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "seq_s3_key",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "pipeline_id",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "rho_upload_id",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "t1_upload_id",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "t2_upload_id",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "seq_upload_id",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "rho_part_url",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "t1_part_url",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "t2_part_url",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "seq_part_url",
+			"value": "",
+			"type": "string"
+		}
+	],
+	"auth": {
+		"type": "bearer",
+		"bearer": [
+			{
+				"key": "token",
+				"value": "{{id_token}}",
+				"type": "string"
+			}
+		]
+	},
+	"item": [
+		{
+			"name": "1 – Authentication",
+			"item": [
+				{
+					"name": "1.1 Login",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"const resp = pm.response.json();",
+									"if (resp.id_token) {",
+									"    pm.collectionVariables.set('id_token', resp.id_token);",
+									"    pm.collectionVariables.set('user_id', resp.user_id);",
+									"    pm.test('Login successful – token saved', () => pm.expect(resp.id_token).to.be.a('string'));",
+									"} else {",
+									"    pm.test('Login failed', () => pm.expect.fail(JSON.stringify(resp)));",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"auth": {
+							"type": "noauth"
+						},
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"email\": \"{{email}}\",\n    \"password\": \"{{password}}\"\n}"
+						},
+						"url": {
+							"raw": "{{api_base}}/auth/login",
+							"host": ["{{api_base}}"],
+							"path": ["auth", "login"]
+						},
+						"description": "Authenticate with CloudMR Brain (Cognito). Saves `id_token` and `user_id` as collection variables."
+					}
+				},
+				{
+					"name": "1.2 Get Profile",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{api_base}}/auth/profile",
+							"host": ["{{api_base}}"],
+							"path": ["auth", "profile"]
+						},
+						"description": "Verify the token works by fetching the user profile."
+					}
+				}
+			]
+		},
+		{
+			"name": "2 – Upload Files",
+			"description": "Upload tissue maps (rho, t1, t2) and pulse sequence to S3 via multipart upload.\n\nFor each file:\n1. **Initiate** → get presigned part URLs and upload ID\n2. **PUT** each part to the presigned URL (collect ETag)\n3. **Finalize** → complete the multipart upload\n\nFor small files (<10 MB) there is only 1 part URL.",
+			"item": [
+				{
+					"name": "2.1a Initiate Upload – rho.nii",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"const resp = pm.response.json();",
+									"if (resp.Key) {",
+									"    pm.collectionVariables.set('rho_s3_key', resp.Key);",
+									"    pm.collectionVariables.set('rho_upload_id', resp.uploadId);",
+									"    if (resp.partUrls && resp.partUrls.length > 0) {",
+									"        pm.collectionVariables.set('rho_part_url', resp.partUrls[0]);",
+									"    }",
+									"    pm.test('rho upload initiated', () => pm.expect(resp.Key).to.include('rho'));",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"filename\": \"rho.nii\",\n    \"filetype\": \"application/octet-stream\",\n    \"filesize\": 0,\n    \"filemd5\": \"\",\n    \"cloudapp_name\": \"CAMRIE\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{api_base}}/upload_initiate",
+							"host": ["{{api_base}}"],
+							"path": ["upload_initiate"]
+						},
+						"description": "Initiate multipart upload for rho.nii.\n\n**Important**: Set `filesize` to the actual file size in bytes. Set `filemd5` to the file's MD5 hex digest."
+					}
+				},
+				{
+					"name": "2.1b PUT Part – rho.nii",
+					"request": {
+						"auth": {
+							"type": "noauth"
+						},
+						"method": "PUT",
+						"header": [],
+						"body": {
+							"mode": "file",
+							"file": {
+								"src": ""
+							}
+						},
+						"url": {
+							"raw": "{{rho_part_url}}",
+							"host": ["{{rho_part_url}}"]
+						},
+						"description": "Upload the file binary to the presigned S3 part URL.\n\n1. Select the rho.nii file in the Body → binary tab\n2. Send the request\n3. Copy the `ETag` header from the response for the finalize step"
+					}
+				},
+				{
+					"name": "2.1c Finalize Upload – rho.nii",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"uploadId\": \"{{rho_upload_id}}\",\n    \"Key\": \"{{rho_s3_key}}\",\n    \"parts\": [\n        {\n            \"partNumber\": 1,\n            \"etag\": \"PASTE_ETAG_FROM_PUT_RESPONSE\"\n        }\n    ]\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{api_base}}/upload_finalize",
+							"host": ["{{api_base}}"],
+							"path": ["upload_finalize"]
+						},
+						"description": "Finalize the multipart upload. Replace `PASTE_ETAG_FROM_PUT_RESPONSE` with the actual ETag from step 2.1b."
+					}
+				},
+				{
+					"name": "2.2a Initiate Upload – t1.nii",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"const resp = pm.response.json();",
+									"if (resp.Key) {",
+									"    pm.collectionVariables.set('t1_s3_key', resp.Key);",
+									"    pm.collectionVariables.set('t1_upload_id', resp.uploadId);",
+									"    if (resp.partUrls && resp.partUrls.length > 0) {",
+									"        pm.collectionVariables.set('t1_part_url', resp.partUrls[0]);",
+									"    }",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"filename\": \"t1.nii\",\n    \"filetype\": \"application/octet-stream\",\n    \"filesize\": 0,\n    \"filemd5\": \"\",\n    \"cloudapp_name\": \"CAMRIE\"\n}"
+						},
+						"url": {
+							"raw": "{{api_base}}/upload_initiate",
+							"host": ["{{api_base}}"],
+							"path": ["upload_initiate"]
+						}
+					}
+				},
+				{
+					"name": "2.2b PUT Part – t1.nii",
+					"request": {
+						"auth": {
+							"type": "noauth"
+						},
+						"method": "PUT",
+						"header": [],
+						"body": {
+							"mode": "file",
+							"file": {
+								"src": ""
+							}
+						},
+						"url": {
+							"raw": "{{t1_part_url}}",
+							"host": ["{{t1_part_url}}"]
+						}
+					}
+				},
+				{
+					"name": "2.2c Finalize Upload – t1.nii",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"uploadId\": \"{{t1_upload_id}}\",\n    \"Key\": \"{{t1_s3_key}}\",\n    \"parts\": [\n        {\n            \"partNumber\": 1,\n            \"etag\": \"PASTE_ETAG_FROM_PUT_RESPONSE\"\n        }\n    ]\n}"
+						},
+						"url": {
+							"raw": "{{api_base}}/upload_finalize",
+							"host": ["{{api_base}}"],
+							"path": ["upload_finalize"]
+						}
+					}
+				},
+				{
+					"name": "2.3a Initiate Upload – t2.nii",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"const resp = pm.response.json();",
+									"if (resp.Key) {",
+									"    pm.collectionVariables.set('t2_s3_key', resp.Key);",
+									"    pm.collectionVariables.set('t2_upload_id', resp.uploadId);",
+									"    if (resp.partUrls && resp.partUrls.length > 0) {",
+									"        pm.collectionVariables.set('t2_part_url', resp.partUrls[0]);",
+									"    }",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"filename\": \"t2.nii\",\n    \"filetype\": \"application/octet-stream\",\n    \"filesize\": 0,\n    \"filemd5\": \"\",\n    \"cloudapp_name\": \"CAMRIE\"\n}"
+						},
+						"url": {
+							"raw": "{{api_base}}/upload_initiate",
+							"host": ["{{api_base}}"],
+							"path": ["upload_initiate"]
+						}
+					}
+				},
+				{
+					"name": "2.3b PUT Part – t2.nii",
+					"request": {
+						"auth": {
+							"type": "noauth"
+						},
+						"method": "PUT",
+						"header": [],
+						"body": {
+							"mode": "file",
+							"file": {
+								"src": ""
+							}
+						},
+						"url": {
+							"raw": "{{t2_part_url}}",
+							"host": ["{{t2_part_url}}"]
+						}
+					}
+				},
+				{
+					"name": "2.3c Finalize Upload – t2.nii",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"uploadId\": \"{{t2_upload_id}}\",\n    \"Key\": \"{{t2_s3_key}}\",\n    \"parts\": [\n        {\n            \"partNumber\": 1,\n            \"etag\": \"PASTE_ETAG_FROM_PUT_RESPONSE\"\n        }\n    ]\n}"
+						},
+						"url": {
+							"raw": "{{api_base}}/upload_finalize",
+							"host": ["{{api_base}}"],
+							"path": ["upload_finalize"]
+						}
+					}
+				},
+				{
+					"name": "2.4a Initiate Upload – sequence.seq",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"const resp = pm.response.json();",
+									"if (resp.Key) {",
+									"    pm.collectionVariables.set('seq_s3_key', resp.Key);",
+									"    pm.collectionVariables.set('seq_upload_id', resp.uploadId);",
+									"    if (resp.partUrls && resp.partUrls.length > 0) {",
+									"        pm.collectionVariables.set('seq_part_url', resp.partUrls[0]);",
+									"    }",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"filename\": \"T1w_TSE.seq\",\n    \"filetype\": \"application/octet-stream\",\n    \"filesize\": 0,\n    \"filemd5\": \"\",\n    \"cloudapp_name\": \"CAMRIE\"\n}"
+						},
+						"url": {
+							"raw": "{{api_base}}/upload_initiate",
+							"host": ["{{api_base}}"],
+							"path": ["upload_initiate"]
+						}
+					}
+				},
+				{
+					"name": "2.4b PUT Part – sequence.seq",
+					"request": {
+						"auth": {
+							"type": "noauth"
+						},
+						"method": "PUT",
+						"header": [],
+						"body": {
+							"mode": "file",
+							"file": {
+								"src": ""
+							}
+						},
+						"url": {
+							"raw": "{{seq_part_url}}",
+							"host": ["{{seq_part_url}}"]
+						}
+					}
+				},
+				{
+					"name": "2.4c Finalize Upload – sequence.seq",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"uploadId\": \"{{seq_upload_id}}\",\n    \"Key\": \"{{seq_s3_key}}\",\n    \"parts\": [\n        {\n            \"partNumber\": 1,\n            \"etag\": \"PASTE_ETAG_FROM_PUT_RESPONSE\"\n        }\n    ]\n}"
+						},
+						"url": {
+							"raw": "{{api_base}}/upload_finalize",
+							"host": ["{{api_base}}"],
+							"path": ["upload_finalize"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "3 – Queue CAMRIE Job",
+			"item": [
+				{
+					"name": "3.1 Queue Job",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"const resp = pm.response.json();",
+									"if (resp.pipeline) {",
+									"    pm.collectionVariables.set('pipeline_id', resp.pipeline);",
+									"    pm.test('Job queued', () => pm.expect(resp.executionArn).to.be.a('string'));",
+									"} else {",
+									"    pm.test('Queue failed', () => pm.expect.fail(JSON.stringify(resp)));",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"cloudapp_name\": \"CAMRIE\",\n    \"alias\": \"Postman Test – Cylindrical Phantom\",\n    \"mode\": \"mode_1\",\n    \"task\": {\n        \"options\": {\n            \"rho\": {\n                \"type\": \"s3\",\n                \"bucket\": \"{{data_bucket}}\",\n                \"key\": \"{{rho_s3_key}}\",\n                \"filename\": \"rho.nii\"\n            },\n            \"t1\": {\n                \"type\": \"s3\",\n                \"bucket\": \"{{data_bucket}}\",\n                \"key\": \"{{t1_s3_key}}\",\n                \"filename\": \"t1.nii\"\n            },\n            \"t2\": {\n                \"type\": \"s3\",\n                \"bucket\": \"{{data_bucket}}\",\n                \"key\": \"{{t2_s3_key}}\",\n                \"filename\": \"t2.nii\"\n            },\n            \"sequence\": {\n                \"type\": \"s3\",\n                \"bucket\": \"{{data_bucket}}\",\n                \"key\": \"{{seq_s3_key}}\",\n                \"filename\": \"T1w_TSE.seq\"\n            },\n            \"geometry\": {\n                \"isocenter_mm\": null,\n                \"slice_normal\": [0, 0, 1],\n                \"num_slices\": 4,\n                \"slice_thickness_mm\": null,\n                \"slice_gap_mm\": 0.0\n            },\n            \"simulation\": {\n                \"b0\": 1.5,\n                \"spin_factor\": 4,\n                \"n_threads\": 4,\n                \"use_gpu\": false,\n                \"apply_hamming\": true,\n                \"spins_per_voxel\": 1,\n                \"parallel_slices\": 1,\n                \"slice_padding\": 0.5\n            }\n        }\n    },\n    \"output\": null,\n    \"computing_unit_id\": null\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{api_base}}/pipeline/queue_job",
+							"host": ["{{api_base}}"],
+							"path": ["pipeline", "queue_job"]
+						},
+						"description": "Submit a CAMRIE simulation job.\n\nThe S3 keys are auto-filled from the upload steps. Adjust `geometry` and `simulation` parameters as needed.\n\n**Key simulation parameters:**\n- `b0`: Main field strength (T)\n- `spin_factor`: Spin density multiplier\n- `spins_per_voxel`: Spins per voxel for GRE\n- `parallel_slices`: Number of slices simulated in parallel\n- `slice_padding`: Padding factor for slice profile\n- `use_gpu`: Enable GPU acceleration (Fargate must have GPU)\n- `n_threads`: Julia threads"
+					}
+				}
+			]
+		},
+		{
+			"name": "4 – Monitor Pipeline",
+			"item": [
+				{
+					"name": "4.1 Get Pipeline Status",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{api_base}}/pipeline/{{pipeline_id}}",
+							"host": ["{{api_base}}"],
+							"path": ["pipeline", "{{pipeline_id}}"]
+						},
+						"description": "Check the status of the submitted pipeline. Status values: `pending`, `queued`, `running`, `completed`, `failed`."
+					}
+				},
+				{
+					"name": "4.2 List My Pipelines",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{api_base}}/pipeline",
+							"host": ["{{api_base}}"],
+							"path": ["pipeline"]
+						},
+						"description": "List all pipelines for the authenticated user."
+					}
+				},
+				{
+					"name": "4.3 List Pipelines by App",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{api_base}}/pipeline/list/CAMRIE",
+							"host": ["{{api_base}}"],
+							"path": ["pipeline", "list", "CAMRIE"]
+						},
+						"description": "List all CAMRIE pipelines for the authenticated user."
+					}
+				}
+			]
+		},
+		{
+			"name": "5 – Admin & Utilities",
+			"item": [
+				{
+					"name": "5.1 List Cloud Apps",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{api_base}}/cloudapp",
+							"host": ["{{api_base}}"],
+							"path": ["cloudapp"]
+						},
+						"description": "List all registered cloud applications."
+					}
+				},
+				{
+					"name": "5.2 List Computing Units",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{api_base}}/computing-unit/list?app_name=CAMRIE",
+							"host": ["{{api_base}}"],
+							"path": ["computing-unit", "list"],
+							"query": [
+								{
+									"key": "app_name",
+									"value": "CAMRIE"
+								}
+							]
+						},
+						"description": "List computing units registered for CAMRIE."
+					}
+				},
+				{
+					"name": "5.3 List My Uploaded Data",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{api_base}}/data?cloudapp_name=CAMRIE",
+							"host": ["{{api_base}}"],
+							"path": ["data"],
+							"query": [
+								{
+									"key": "cloudapp_name",
+									"value": "CAMRIE"
+								}
+							]
+						},
+						"description": "List all data files uploaded for CAMRIE."
+					}
+				},
+				{
+					"name": "5.4 Count Mode 1 Calculations",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{api_base}}/pipeline/count_mode1",
+							"host": ["{{api_base}}"],
+							"path": ["pipeline", "count_mode1"]
+						},
+						"description": "Count how many mode_1 calculations the user has run this month."
+					}
+				},
+				{
+					"name": "5.5 Delete Pipeline",
+					"request": {
+						"method": "DELETE",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"pipeline\": \"{{pipeline_id}}\"\n}"
+						},
+						"url": {
+							"raw": "{{api_base}}/pipeline/delete",
+							"host": ["{{api_base}}"],
+							"path": ["pipeline", "delete"]
+						}
+					}
+				}
+			]
+		}
+	]
+}

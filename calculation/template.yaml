@@ -157,6 +157,9 @@ Resources:
             - Effect: Allow
               Action: [ecs:RunTask, iam:PassRole]
               Resource: "*"
+            - Effect: Allow
+              Action: [s3:PutObject]
+              Resource: !Sub "arn:aws:s3:::${DataBucketPName}/_camrie_events/*"
       Environment:
         Variables:
           CLUSTER_ARN:   !GetAtt ECSCluster.Arn
@@ -164,11 +167,27 @@ Resources:
           SUBNET_1:      !Ref SubnetId1
           SUBNET_2:      !Ref SubnetId2
           SECURITY_GROUP: !Ref SecurityGroupIds
+          DATA_BUCKET:   !Ref DataBucketPName
       InlineCode: |
-        import json, os, boto3
+        import json, os, uuid, boto3
 
         def lambda_handler(event, context):
             ecs = boto3.client("ecs")
+            s3  = boto3.client("s3")
+
+            # Write the full event JSON to S3 to avoid the 8192-char ECS
+            # containerOverrides limit (presigned URLs make the payload huge).
+            data_bucket = os.environ.get("DATA_BUCKET", "")
+            event_json  = json.dumps(event)
+
+            if len(event_json) > 7000 and data_bucket:
+                event_key = f"_camrie_events/{uuid.uuid4()}.json"
+                s3.put_object(Bucket=data_bucket, Key=event_key, Body=event_json.encode())
+                file_event_value = json.dumps({"s3_event_bucket": data_bucket, "s3_event_key": event_key})
+                print(f"Event too large ({len(event_json)} chars), stored at s3://{data_bucket}/{event_key}")
+            else:
+                file_event_value = event_json
+
             response = ecs.run_task(
                 cluster=os.environ["CLUSTER_ARN"],
                 taskDefinition=os.environ["TASK_DEF_ARN"],
@@ -187,7 +206,7 @@ Resources:
                     "containerOverrides": [{
                         "name": "camrie-worker",
                         "environment": [
-                            {"name": "FILE_EVENT", "value": json.dumps(event)}
+                            {"name": "FILE_EVENT", "value": file_event_value}
                         ],
                     }]
                 },
