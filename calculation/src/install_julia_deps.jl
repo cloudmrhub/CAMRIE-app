@@ -12,11 +12,15 @@ Pkg.Registry.add(; url="https://github.com/cloudmrhub/CloudRegistry.git")
 # Core packages used by simulate_batch_final.jl
 Pkg.add(["KomaMRI", "NPZ", "JSON", "HDF5", "LinearAlgebra"])
 
+# GPU support — CUDA.jl downloads its own CUDA toolkit artifacts at install
+# time; the NVIDIA driver is provided by Fargate GPU at runtime.
+Pkg.add("CUDA")
+
 # Force full precompilation
 Pkg.precompile()
 
 # Verify: load every package in a fresh Julia call to confirm the cache works.
 # If this fails the docker build aborts here, not at runtime.
-run(`julia -e 'using KomaMRI, NPZ, JSON, HDF5; println("✓ Precompile cache verified OK")'`)
+run(`julia -e 'using KomaMRI, NPZ, JSON, HDF5, CUDA; println("✓ Precompile cache verified OK")'`)
 
 println("Julia deps installed and precompiled OK")
