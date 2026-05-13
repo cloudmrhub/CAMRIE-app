@@ -33,37 +33,39 @@ can also be used directly as  "type":"local"  entries.
 """
 
 import argparse
-import struct
 import numpy as np
 from pathlib import Path
 
+from pyable import Imaginable
 
-# ─── tiny NIfTI-1 writer (no nibabel dependency) ──────────────────────────────
-def write_nifti(path: Path, data: np.ndarray, voxel_mm: float):
-    """Write a float32 3-D array as a minimal NIfTI-1 file."""
-    data = data.astype(np.float32)
-    hdr = bytearray(352)
 
-    def si(offset, fmt, *vals):
-        struct.pack_into(fmt, hdr, offset, *vals)
+# ─── helpers ──────────────────────────────────────────────────────────────────
+def _save_map(array_xyz, out_path, voxel_mm):
+    """Save a (nx, ny, nz) XYZ float32 array as a proper NIfTI via Imaginable.
 
-    nx, ny, nz = data.shape
-    si(0,   "<i",  348)                    # sizeof_hdr
-    si(40,  "<h",  3)                      # dim[0] = 3-D
-    si(42,  "<hhh", nx, ny, nz)            # dim[1..3]
-    si(70,  "<h",  16)                     # datatype = float32
-    si(72,  "<h",  32)                     # bitpix
-    si(76,  "<f",  1.0)                    # pixdim[0]
-    si(80,  "<fff", voxel_mm, voxel_mm, voxel_mm)  # pixdim[1..3]
-    si(108, "<f",  352.0)                  # vox_offset
-    si(112, "<f",  1.0)                    # scl_slope
-    si(344, "4s",  b"n+1\x00")            # magic
+    Imaginable.setImageFromNumpy expects (Z, Y, X) ordering, so we transpose
+    before passing.  Spacing, origin (centred), and direction (identity/LPS)
+    are set explicitly so every viewer reads the file correctly.
+    """
+    nx, ny, nz = array_xyz.shape
+    arr_zyx = np.transpose(array_xyz.astype(np.float32), (2, 1, 0))  # (nz, ny, nx)
 
-    with open(path, "wb") as f:
-        f.write(bytes(hdr))
-        f.write(data.tobytes())
+    spacing   = (float(voxel_mm),) * 3
+    # Place origin so the phantom is centred at physical (0,0,0)
+    origin    = (
+        -(nx - 1) / 2.0 * voxel_mm,
+        -(ny - 1) / 2.0 * voxel_mm,
+        -(nz - 1) / 2.0 * voxel_mm,
+    )
+    direction = (1.0, 0.0, 0.0,   # LPS identity
+                 0.0, 1.0, 0.0,
+                 0.0, 0.0, 1.0)
 
-    print(f"  wrote {path}  {data.shape}  range [{data.min():.1f}, {data.max():.1f}]")
+    img = Imaginable()
+    img.setImageFromNumpy(arr_zyx, spacing=spacing, origin=origin, direction=direction)
+    img.writeImageAs(str(out_path))
+
+    print(f"  wrote {out_path}  {array_xyz.shape}  range [{array_xyz.min():.1f}, {array_xyz.max():.1f}]")
 
 
 # ─── main ─────────────────────────────────────────────────────────────────────
@@ -131,9 +133,9 @@ def make_phantom(
     t1_map = make_map(*[c[1] for c in (background, outer_ring, inner_core)])
     t2_map = make_map(*[c[2] for c in (background, outer_ring, inner_core)])
 
-    write_nifti(out_dir / "rho.nii", pd_map, voxel_mm)
-    write_nifti(out_dir / "t1.nii",  t1_map, voxel_mm)
-    write_nifti(out_dir / "t2.nii",  t2_map, voxel_mm)
+    _save_map(pd_map, out_dir / "rho.nii", voxel_mm)
+    _save_map(t1_map, out_dir / "t1.nii",  voxel_mm)
+    _save_map(t2_map, out_dir / "t2.nii",  voxel_mm)
 
     print(f"\nDone → {out_dir}")
 

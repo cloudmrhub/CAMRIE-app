@@ -17,6 +17,17 @@
 #   --outer-t1 1200 --outer-t2 80  --outer-pd 0.8   (outer ring)
 #   --inner-r 3     --outer-r 6    --height 5        (geometry in cm)
 #
+# Simulation parameters (patch event.json before running)
+#   --b0 1.5                    B0 field strength in Tesla (default: from event.json)
+#   --spins-per-voxel-gre 64    Extra spins per voxel for GRE (default: from event.json)
+#   --use-model-axial-normal    Force axial slice normal [0,0,1]
+#   --parallel-slices 2         Worker threads for slice extraction/recon
+#   --jobs 2                    Julia/CPU threads for simulation
+#   --spin-factor 4             Spin lattice density factor
+#   --slice-padding 0.5         Slice padding multiplier
+#   --num-slices 250            Number of slices to simulate
+#   --gpu                       Enable GPU simulation (requires CUDA + KomaMRI GPU backend)
+#
 # What it does
 # ------------
 #   1. Check 'koma' conda env is present
@@ -48,21 +59,42 @@ INNER_R=3.0;  OUTER_R=6.0;  HEIGHT=5.0
 INNER_PD=1.0; INNER_T1=800;  INNER_T2=60
 OUTER_PD=0.8; OUTER_T1=1200; OUTER_T2=80
 
+# Simulation overrides (empty = keep whatever is already in event.json)
+SIM_B0=""
+SIM_SPINS_PER_VOXEL=""
+SIM_USE_AXIAL_NORMAL=false
+SIM_PARALLEL_SLICES=""
+SIM_JOBS=""
+SIM_SPIN_FACTOR=""
+SIM_SLICE_PADDING=""
+SIM_NUM_SLICES=""
+SIM_GPU=false
+
 # ── parse arguments ───────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --seq)           SEQ_FILE="$2";     shift 2 ;;
-        --skip-phantom)  SKIP_PHANTOM=true; shift   ;;
-        --voxel-mm)      VOXEL_MM="$2";     shift 2 ;;
-        --inner-r)       INNER_R="$2";      shift 2 ;;
-        --outer-r)       OUTER_R="$2";      shift 2 ;;
-        --height)        HEIGHT="$2";       shift 2 ;;
-        --inner-pd)      INNER_PD="$2";     shift 2 ;;
-        --inner-t1)      INNER_T1="$2";     shift 2 ;;
-        --inner-t2)      INNER_T2="$2";     shift 2 ;;
-        --outer-pd)      OUTER_PD="$2";     shift 2 ;;
-        --outer-t1)      OUTER_T1="$2";     shift 2 ;;
-        --outer-t2)      OUTER_T2="$2";     shift 2 ;;
+        --seq)                   SEQ_FILE="$2";              shift 2 ;;
+        --skip-phantom)          SKIP_PHANTOM=true;          shift   ;;
+        --voxel-mm)              VOXEL_MM="$2";              shift 2 ;;
+        --inner-r)               INNER_R="$2";               shift 2 ;;
+        --outer-r)               OUTER_R="$2";               shift 2 ;;
+        --height)                HEIGHT="$2";                shift 2 ;;
+        --inner-pd)              INNER_PD="$2";              shift 2 ;;
+        --inner-t1)              INNER_T1="$2";              shift 2 ;;
+        --inner-t2)              INNER_T2="$2";              shift 2 ;;
+        --outer-pd)              OUTER_PD="$2";              shift 2 ;;
+        --outer-t1)              OUTER_T1="$2";              shift 2 ;;
+        --outer-t2)              OUTER_T2="$2";              shift 2 ;;
+        # Simulation overrides
+        --b0)                    SIM_B0="$2";                shift 2 ;;
+        --spins-per-voxel-gre|--spins-per-voxel) SIM_SPINS_PER_VOXEL="$2"; shift 2 ;;
+        --use-model-axial-normal) SIM_USE_AXIAL_NORMAL=true; shift   ;;
+        --parallel-slices)       SIM_PARALLEL_SLICES="$2";  shift 2 ;;
+        --jobs)                  SIM_JOBS="$2";              shift 2 ;;
+        --spin-factor)           SIM_SPIN_FACTOR="$2";       shift 2 ;;
+        --slice-padding)         SIM_SLICE_PADDING="$2";     shift 2 ;;
+        --num-slices)            SIM_NUM_SLICES="$2";        shift 2 ;;
+        --gpu)                   SIM_GPU=true;               shift   ;;
         -h|--help)
             sed -n '2,/^# ====/p' "$0" | grep '^#' | sed 's/^# \?//'
             exit 0 ;;
@@ -174,6 +206,44 @@ print(ev['task']['options'].get('sequence', {}).get('local_path', ''))
     ok "Using sequence from event.json: ${SEQ_IN_EVENT}"
 fi
 
+# ── 3b. Patch simulation / geometry params into event.json ───────────────────
+section "Patching simulation parameters"
+python3 - "${EVENT_FILE}" \
+    "${SIM_B0}" "${SIM_SPINS_PER_VOXEL}" "${SIM_USE_AXIAL_NORMAL}" \
+    "${SIM_PARALLEL_SLICES}" "${SIM_JOBS}" "${SIM_SPIN_FACTOR}" \
+    "${SIM_SLICE_PADDING}" "${SIM_NUM_SLICES}" "${SIM_GPU}" <<'PYEOF'
+import json, sys
+
+event_path = sys.argv[1]
+b0, spins_per_voxel, use_axial, parallel_slices, jobs, spin_factor, slice_padding, num_slices, use_gpu = sys.argv[2:11]
+
+with open(event_path) as f:
+    ev = json.load(f)
+
+sim = ev["task"]["options"].setdefault("simulation", {})
+geo = ev["task"]["options"].setdefault("geometry", {})
+
+if b0:              sim["b0"]              = float(b0)
+if spins_per_voxel: sim["spins_per_voxel"] = int(spins_per_voxel)
+if parallel_slices: sim["parallel_slices"] = int(parallel_slices)
+if jobs:            sim["n_threads"]       = int(jobs)
+if spin_factor:     sim["spin_factor"]     = int(spin_factor)
+if slice_padding:   sim["slice_padding"]   = float(slice_padding)
+if num_slices:      geo["num_slices"]      = int(num_slices)
+if use_axial == "true":
+    geo["slice_normal"] = [0, 0, 1]
+    print("  slice_normal forced to axial [0,0,1]")
+if use_gpu == "true":  sim["use_gpu"] = True
+
+with open(event_path, "w") as f:
+    json.dump(ev, f, indent=4)
+
+changed = {k: sim[k] for k in ("b0","spins_per_voxel","parallel_slices","n_threads","spin_factor","slice_padding","use_gpu") if k in sim}
+changed.update({"num_slices": geo.get("num_slices"), "slice_normal": geo.get("slice_normal")})
+print(f"  event.json simulation params: {changed}")
+PYEOF
+ok "event.json patched"
+
 # ── 4. Run pipeline ───────────────────────────────────────────────────────────
 section "Running pipeline"
 info "Results will land in: ${OUT_DIR}"
@@ -181,7 +251,7 @@ echo
 
 cd "${SCRIPT_DIR}"   # local_path entries in event.json are relative to calculation/
 LOCAL_RESULTS_DIR="${OUT_DIR}" \
-    conda run -n koma python "${SRC}/local_test.py" "${EVENT_FILE}"
+    conda run --no-capture-output -n koma python -u "${SRC}/local_test.py" "${EVENT_FILE}"
 
 # ── 5. Report ─────────────────────────────────────────────────────────────────
 section "Done"

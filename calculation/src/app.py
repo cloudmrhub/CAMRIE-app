@@ -43,6 +43,8 @@ import boto3
 import numpy as np
 import requests
 from pynico_eros_montin import pynico as pn
+from pyable_eros_montin import imaginable as ima
+from cmtools import cmaws as ca
 
 import MRI_pipeline as pipeline
 
@@ -223,9 +225,11 @@ def do_process(event, context=None, s3=None):
         n_threads    = int(sim.get("n_threads", int(os.getenv("CAMRIE_THREADS", "4"))))
         use_gpu      = bool(sim.get("use_gpu", False))
         apply_hamming = bool(sim.get("apply_hamming", True))
-        spins_per_voxel = int(sim.get("spins_per_voxel", 0))
-        spin_method  = sim.get("spin_method", pipeline.DEFAULT_SPIN_METHOD)
-        t2star_factor = float(sim.get("t2star_factor", 1.0))
+        spins_per_voxel  = int(sim.get("spins_per_voxel", 0))
+        spin_method      = sim.get("spin_method", pipeline.DEFAULT_SPIN_METHOD)
+        t2star_factor    = float(sim.get("t2star_factor", 1.0))
+        parallel_slices  = int(sim.get("parallel_slices", 4))
+        slice_padding    = float(sim.get("slice_padding", 1.0))
 
         # ── 6. Output directory ─────────────────────────────────────────────
         out_base = create_random_temp_dir()
@@ -252,50 +256,88 @@ def do_process(event, context=None, s3=None):
             b0=b0,
             use_gpu=use_gpu,
             n_threads=n_threads,
+            parallel_slices=parallel_slices,
             apply_hamming=apply_hamming,
             spins_per_voxel=spins_per_voxel,
             spin_method=pipeline.normalize_spin_methods(spin_method),
+            slice_padding=slice_padding,
             t2star_factor=t2star_factor,
             debug=False,
         )
         logger.write("Pipeline completed successfully")
 
-        # ── 8. Augment info.json with job metadata ──────────────────────────
-        info_json_path = Path(out_dir) / "info.json"
-        try:
-            job_meta = {
-                "user_id": user_id,
-                "pipeline": pipelineid,
-                "token": token,
-                "num_slices": num_slices,
-                "b0": b0,
-            }
-            with open(info_json_path, "w") as f:
-                json.dump(sanitize_for_json(job_meta), f, indent=4)
-        except Exception:
-            traceback.print_exc()
+        # ── 8. Package outputs with cmrOutput ───────────────────────────────
+        #
+        # ID convention (matches old CAMRIE lambda):
+        #   1   – Reconstruction (final 3-D NIfTI volume)
+        #  10   – K-space real
+        #  11   – K-space imaginary
+        #  12   – K-space magnitude
+        #
+        out = ca.cmrOutput(app="CAMRIE")
+        out.setPipeline(pipelineid)
+        out.setToken(token)
+        out.out["user_id"] = user_id
+        out.out["info"] = sanitize_for_json({
+            "num_slices":      num_slices,
+            "b0":              b0,
+            "spin_factor":     spin_factor,
+            "spins_per_voxel": spins_per_voxel,
+            "parallel_slices": parallel_slices,
+            "n_threads":       n_threads,
+            "slice_padding":   slice_padding,
+            "use_gpu":         use_gpu,
+            "apply_hamming":   apply_hamming,
+            "slice_normal":    slice_normal,
+            "isocenter_mm":    isocenter_mm,
+            "slice_thickness_mm": slice_thickness,
+            "slice_gap_mm":    slice_gap,
+        })
 
-        # ── 9. Zip results ──────────────────────────────────────────────────
-        zip_path = Path(
-            shutil.make_archive(str(pick_random_path()), "zip", out_dir)
+        # Reconstruction volume (id=1)
+        recon_path = Path(out_dir) / "reconstruction.nii.gz"
+        if recon_path.exists():
+            out.addAble(
+                ima.Imaginable(str(recon_path)),
+                id=1, name="Reconstruction", type="output",
+                basename="reconstruction.nii.gz",
+            )
+            logger.write(f"Added reconstruction: {recon_path}")
+
+        # K-space NIfTIs – freq × phase × slices, 1 coil (ids 10-12)
+        for ks_id, ks_suffix, ks_label in [
+            (10, "real",      "K-Space Real"),
+            (11, "imag",      "K-Space Imaginary"),
+            (12, "magnitude", "K-Space Magnitude"),
+        ]:
+            ks_path = Path(out_dir) / f"kspace_{ks_suffix}.nii.gz"
+            if ks_path.exists():
+                out.addAble(
+                    ima.Imaginable(str(ks_path)),
+                    id=ks_id, name=ks_label, type="output",
+                    basename=f"kspace_{ks_suffix}.nii.gz",
+                )
+
+        # Series geometry JSON + slice PNG previews as auxiliaries
+        series_spec_path = Path(out_dir) / "series_spec.json"
+        if series_spec_path.exists():
+            out.addAuxiliaryFile(str(series_spec_path))
+        previews_dir = Path(out_dir) / "previews"
+        if previews_dir.is_dir():
+            for png in sorted(previews_dir.glob("*.png")):
+                out.addAuxiliaryFile(str(png))
+
+        out.setLog(logger)
+        out.setOptions(opts)
+        out.setTask(task_info)
+
+        # ── 9. Export & upload ──────────────────────────────────────────────
+        result_bucket = os.getenv("ResultsBucketName", "camrie-results")
+        export_results = out.exportAndZipResultsToS3(
+            bucket=result_bucket, deleteoutputzip=True, s3=s3
         )
-        logger.write(f"Results zipped: {zip_path}")
-
-        # ── 10. Upload ──────────────────────────────────────────────────────
-        if presigned_url := info_json.get("presigned_upload_url"):
-            logger.write("Uploading via presigned URL")
-            r = requests.put(presigned_url, data=zip_path.open("rb"))
-            r.raise_for_status()
-            key, result_bucket = parse_s3_url(presigned_url)
-        else:
-            key = f"CAMRIE/{user_id}/{zip_path.name}"
-            s3.Bucket(result_bucket).upload_file(str(zip_path), key)
-            logger.write(f"Uploaded to s3://{result_bucket}/{key}")
-
-        return {
-            "statusCode": 200,
-            "body": json.dumps({"results": {"key": key, "bucket": result_bucket}}),
-        }
+        logger.write(f"Results uploaded: {export_results}")
+        return {"statusCode": 200, "body": json.dumps(export_results)}
 
     except Exception:
         error_formatted = traceback.format_exc()
