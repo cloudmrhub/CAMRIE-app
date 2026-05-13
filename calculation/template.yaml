@@ -56,6 +56,9 @@ Parameters:
     Default: g4dn.xlarge
     Description: EC2 GPU instance type (g4dn.xlarge = 1x T4, g5.xlarge = 1x A10G).
 
+Conditions:
+  GpuEnabled: !Not [!Equals [!Ref GpuImageUri, ""]]
+
 Resources:
 
   # ── ECS Cluster ─────────────────────────────────────────────────────────────
@@ -157,10 +160,10 @@ Resources:
       LogGroupName: !Sub "/ecs/camrie-${StageName}"
       RetentionInDays: 30
 
-  # ── EC2 GPU path ─────────────────────────────────────────────────────────────
-  # IAM role that EC2 instances need to register with ECS
+  # ── EC2 GPU path (only created when GpuImageUri is set) ─────────────────────
   EC2InstanceRole:
     Type: AWS::IAM::Role
+    Condition: GpuEnabled
     Properties:
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
@@ -190,12 +193,13 @@ Resources:
 
   EC2InstanceProfile:
     Type: AWS::IAM::InstanceProfile
+    Condition: GpuEnabled
     Properties:
       Roles: [!Ref EC2InstanceRole]
 
-  # Launch template for g4dn GPU instances using ECS GPU-optimised AMI
   GpuLaunchTemplate:
     Type: AWS::EC2::LaunchTemplate
+    Condition: GpuEnabled
     Properties:
       LaunchTemplateData:
         # ECS-optimised GPU AMI (Amazon Linux 2, latest)
@@ -219,6 +223,7 @@ Resources:
 
   GpuAutoScalingGroup:
     Type: AWS::AutoScaling::AutoScalingGroup
+    Condition: GpuEnabled
     Properties:
       MinSize: "0"
       MaxSize: "2"
@@ -232,10 +237,9 @@ Resources:
           Value: !Sub "camrie-gpu-${StageName}"
           PropagateAtLaunch: true
 
-  # Capacity provider: managed scaling wakes up GPU instances on demand
-  # and scales back to 0 when the queue is empty.
   GpuCapacityProvider:
     Type: AWS::ECS::CapacityProvider
+    Condition: GpuEnabled
     Properties:
       AutoScalingGroupProvider:
         AutoScalingGroupArn: !Ref GpuAutoScalingGroup
@@ -246,18 +250,18 @@ Resources:
           MaximumScalingStepSize: 1
         ManagedTerminationProtection: DISABLED
 
-  # Associate GPU capacity provider with the cluster
   ClusterCapacityProviderAssociation:
     Type: AWS::ECS::ClusterCapacityProviderAssociations
+    Condition: GpuEnabled
     Properties:
       Cluster: !Ref ECSCluster
       CapacityProviders:
         - !Ref GpuCapacityProvider
       DefaultCapacityProviderStrategy: []
 
-  # GPU task definition — EC2 launch type, 1x GPU, CUDA image
   GpuTaskDefinition:
     Type: AWS::ECS::TaskDefinition
+    Condition: GpuEnabled
     Properties:
       Family: !Sub "camrie-gpu-task-${StageName}"
       NetworkMode: awsvpc
@@ -291,6 +295,7 @@ Resources:
 
   GpuLogGroup:
     Type: AWS::Logs::LogGroup
+    Condition: GpuEnabled
     Properties:
       LogGroupName: !Sub "/ecs/camrie-gpu-${StageName}"
       RetentionInDays: 30
@@ -316,8 +321,8 @@ Resources:
         Variables:
           CLUSTER_ARN:          !GetAtt ECSCluster.Arn
           TASK_DEF_ARN:         !Ref FargateTaskDefinition
-          GPU_TASK_DEF_ARN:     !Ref GpuTaskDefinition
-          GPU_CAPACITY_PROVIDER: !Ref GpuCapacityProvider
+          GPU_TASK_DEF_ARN:     !If [GpuEnabled, !Ref GpuTaskDefinition, ""]
+          GPU_CAPACITY_PROVIDER: !If [GpuEnabled, !Ref GpuCapacityProvider, ""]
           SUBNET_1:             !Ref SubnetId1
           SUBNET_2:             !Ref SubnetId2
           SECURITY_GROUP:       !Ref SecurityGroupIds
@@ -448,12 +453,14 @@ Outputs:
       Name: !Sub "${AWS::StackName}-ECSClusterArn"
 
   GpuCapacityProviderName:
+    Condition: GpuEnabled
     Description: Name of the GPU ECS capacity provider
     Value: !Ref GpuCapacityProvider
     Export:
       Name: !Sub "${AWS::StackName}-GpuCapacityProvider"
 
   GpuLogGroupName:
+    Condition: GpuEnabled
     Description: CloudWatch log group for GPU tasks
     Value: !Ref GpuLogGroup
     Export:
