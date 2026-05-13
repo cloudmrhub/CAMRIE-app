@@ -338,13 +338,6 @@ Resources:
             else:
                 file_event_value = event_json
 
-            network_cfg = {
-                "awsvpcConfiguration": {
-                    "subnets":        [os.environ["SUBNET_1"], os.environ["SUBNET_2"]],
-                    "securityGroups": [os.environ["SECURITY_GROUP"]],
-                    "assignPublicIp": "ENABLED",
-                }
-            }
             overrides = {
                 "containerOverrides": [{
                     "name": "camrie-worker",
@@ -357,6 +350,13 @@ Resources:
 
             if use_gpu and gpu_task_def and gpu_cap_prov:
                 print("GPU requested — routing to EC2/GPU task")
+                network_cfg = {
+                    "awsvpcConfiguration": {
+                        "subnets":        [os.environ["SUBNET_1"], os.environ["SUBNET_2"]],
+                        "securityGroups": [os.environ["SECURITY_GROUP"]],
+                        # EC2 launch type does NOT support assignPublicIp
+                    }
+                }
                 response = ecs.run_task(
                     cluster=os.environ["CLUSTER_ARN"],
                     taskDefinition=gpu_task_def,
@@ -367,6 +367,13 @@ Resources:
             else:
                 if use_gpu:
                     print("GPU requested but GPU path not configured — falling back to CPU/Fargate")
+                network_cfg = {
+                    "awsvpcConfiguration": {
+                        "subnets":        [os.environ["SUBNET_1"], os.environ["SUBNET_2"]],
+                        "securityGroups": [os.environ["SECURITY_GROUP"]],
+                        "assignPublicIp": "ENABLED",
+                    }
+                }
                 response = ecs.run_task(
                     cluster=os.environ["CLUSTER_ARN"],
                     taskDefinition=os.environ["TASK_DEF_ARN"],
