@@ -15,6 +15,8 @@ env:
   # stored in this repo — they are pulled fresh from source on every build)
   MAKEITKOMA_REPO: cloudmrhub/makeitKOMA
   MAKEITKOMA_REF: camrie-tools-v1
+  # Same ECR repo, separate tags: :latest (CPU/Fargate) and :gpu-latest (EC2/GPU)
+  GPU_TAG_SUFFIX: gpu
 
 permissions:
   id-token: write
@@ -105,11 +107,44 @@ jobs:
           echo ""
           echo "✓ Image pushed: ${FARGATE_URI}:latest"
 
+      - name: Build and push GPU image
+        id: build-gpu
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ steps.meta.outputs.image_tag }}
+        run: |
+          set -euo pipefail
+          cd calculation/src
+
+          FARGATE_URI="${ECR_REGISTRY}/${FARGATE_REPO}"
+          GPU_TAG="${GPU_TAG_SUFFIX}-${IMAGE_TAG}"
+
+          echo "╔═══════════════════════════════════════════════════════════╗"
+          echo "║   Building CAMRIE GPU Image (CUDA/EC2)                    ║"
+          echo "╚═══════════════════════════════════════════════════════════╝"
+          echo "Tag: ${GPU_TAG}"
+          echo ""
+
+          docker build --provenance=false \
+            -f DockerfileGpu \
+            -t ${FARGATE_REPO}:${GPU_TAG} .
+
+          docker tag ${FARGATE_REPO}:${GPU_TAG} ${FARGATE_URI}:${GPU_TAG}
+          docker tag ${FARGATE_REPO}:${GPU_TAG} ${FARGATE_URI}:${GPU_TAG_SUFFIX}-latest
+
+          docker push ${FARGATE_URI}:${GPU_TAG}
+          docker push ${FARGATE_URI}:${GPU_TAG_SUFFIX}-latest
+
+          echo "gpu_image_uri=${FARGATE_URI}:${GPU_TAG_SUFFIX}-latest" >> $GITHUB_OUTPUT
+          echo ""
+          echo "✓ GPU image pushed: ${FARGATE_URI}:${GPU_TAG_SUFFIX}-latest"
+
       - name: Build Summary
         run: |
           echo "╔═══════════════════════════════════════════════════════════╗"
           echo "║   Build Complete                                          ║"
           echo "╚═══════════════════════════════════════════════════════════╝"
-          echo "Fargate: ${{ steps.build.outputs.fargate_image_uri }}"
+          echo "CPU (Fargate): ${{ steps.build.outputs.fargate_image_uri }}"
+          echo "GPU (EC2):     ${{ steps.build-gpu.outputs.gpu_image_uri }}"
           echo ""
           echo "Deploy workflow will pick up :latest automatically."

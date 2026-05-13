@@ -179,3 +179,4 @@ cython_debug/
 backend/.aws-sam/build.toml
 .env.json
 key.json
+commands

@@ -121,7 +121,7 @@ jobs:
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
           echo "account_id=${ACCOUNT_ID}" >> $GITHUB_OUTPUT
 
-      - name: Resolve Fargate image digest from ECR
+      - name: Resolve image digests from ECR
         id: images
         env:
           ACCOUNT_ID: ${{ steps.account.outputs.account_id }}
@@ -129,6 +129,7 @@ jobs:
           set -euo pipefail
           ECR_REGISTRY="${ACCOUNT_ID}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com"
 
+          # CPU / Fargate image (required)
           FARGATE_DIGEST=$(aws ecr describe-images \
             --repository-name ${FARGATE_REPO} \
             --image-ids imageTag=latest \
@@ -143,7 +144,24 @@ jobs:
 
           FARGATE_URI="${ECR_REGISTRY}/${FARGATE_REPO}@${FARGATE_DIGEST}"
           echo "fargate_image_uri=${FARGATE_URI}" >> $GITHUB_OUTPUT
-          echo "Fargate image (digest): ${FARGATE_URI}"
+          echo "Fargate (CPU): ${FARGATE_URI}"
+
+          # GPU / EC2 image (optional — falls back to empty string if not built yet)
+          GPU_DIGEST=$(aws ecr describe-images \
+            --repository-name ${FARGATE_REPO} \
+            --image-ids imageTag=gpu-latest \
+            --region ${{ env.AWS_REGION }} \
+            --query 'imageDetails[0].imageDigest' \
+            --output text 2>/dev/null || true)
+
+          if [ -z "$GPU_DIGEST" ] || [ "$GPU_DIGEST" = "None" ]; then
+            echo "⚠️  GPU image not found — GPU path will be disabled (GpuImageUri=empty)"
+            echo "gpu_image_uri=" >> $GITHUB_OUTPUT
+          else
+            GPU_URI="${ECR_REGISTRY}/${FARGATE_REPO}@${GPU_DIGEST}"
+            echo "gpu_image_uri=${GPU_URI}" >> $GITHUB_OUTPUT
+            echo "GPU (EC2):    ${GPU_URI}"
+          fi
 
       - name: Setup SAM CLI
         uses: aws-actions/setup-sam@v2
@@ -161,6 +179,7 @@ jobs:
             --resolve-s3 \
             --parameter-overrides \
               FargateImageUri=${{ steps.images.outputs.fargate_image_uri }} \
+              GpuImageUri=${{ steps.images.outputs.gpu_image_uri }} \
               CortexHost=${{ secrets.CLOUDMR_API_HOST || 'f41j488v7j.execute-api.us-east-1.amazonaws.com' }} \
               CloudMRBrainStackName=${{ env.CLOUDMR_BRAIN_STACK }} \
               ECSClusterName=${{ env.STACK_NAME }}-cluster \

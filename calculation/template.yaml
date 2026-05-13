@@ -45,6 +45,17 @@ Parameters:
     Type: AWS::EC2::SecurityGroup::Id
     Description: Security group for ECS tasks.
 
+  # GPU compute (EC2-backed ECS)
+  GpuImageUri:
+    Type: String
+    Description: ECR URI for the GPU (CUDA) Docker image. Leave empty to disable GPU path.
+    Default: ""
+
+  GpuInstanceType:
+    Type: String
+    Default: g4dn.xlarge
+    Description: EC2 GPU instance type (g4dn.xlarge = 1x T4, g5.xlarge = 1x A10G).
+
 Resources:
 
   # ── ECS Cluster ─────────────────────────────────────────────────────────────
@@ -146,6 +157,144 @@ Resources:
       LogGroupName: !Sub "/ecs/camrie-${StageName}"
       RetentionInDays: 30
 
+  # ── EC2 GPU path ─────────────────────────────────────────────────────────────
+  # IAM role that EC2 instances need to register with ECS
+  EC2InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: CamrieEC2S3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [s3:GetObject, s3:ListBucket]
+                Resource:
+                  - !Sub "arn:aws:s3:::${DataBucketPName}"
+                  - !Sub "arn:aws:s3:::${DataBucketPName}/*"
+              - Effect: Allow
+                Action: [s3:PutObject]
+                Resource:
+                  - !Sub "arn:aws:s3:::${ResultsBucketPName}/*"
+                  - !Sub "arn:aws:s3:::${FailedBucketPName}/*"
+
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref EC2InstanceRole]
+
+  # Launch template for g4dn GPU instances using ECS GPU-optimised AMI
+  GpuLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        # ECS-optimised GPU AMI (Amazon Linux 2, latest)
+        ImageId: !Sub "{{resolve:ssm:/aws/service/ecs/optimized-ami/amazon-linux-2/gpu/recommended/image_id}}"
+        InstanceType: !Ref GpuInstanceType
+        IamInstanceProfile:
+          Arn: !GetAtt EC2InstanceProfile.Arn
+        SecurityGroupIds: [!Ref SecurityGroupIds]
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            echo ECS_CLUSTER=${ECSClusterName}      >> /etc/ecs/ecs.config
+            echo ECS_ENABLE_GPU_SUPPORT=true         >> /etc/ecs/ecs.config
+            echo ECS_ENABLE_AWSLOGS_EXECUTIONROLE_OVERRIDE=true >> /etc/ecs/ecs.config
+        BlockDeviceMappings:
+          - DeviceName: /dev/xvda
+            Ebs:
+              VolumeSize: 100
+              VolumeType: gp3
+              DeleteOnTermination: true
+
+  GpuAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      MinSize: "0"
+      MaxSize: "2"
+      DesiredCapacity: "0"
+      VPCZoneIdentifier: [!Ref SubnetId1, !Ref SubnetId2]
+      LaunchTemplate:
+        LaunchTemplateId: !Ref GpuLaunchTemplate
+        Version: !GetAtt GpuLaunchTemplate.LatestVersionNumber
+      Tags:
+        - Key: Name
+          Value: !Sub "camrie-gpu-${StageName}"
+          PropagateAtLaunch: true
+
+  # Capacity provider: managed scaling wakes up GPU instances on demand
+  # and scales back to 0 when the queue is empty.
+  GpuCapacityProvider:
+    Type: AWS::ECS::CapacityProvider
+    Properties:
+      AutoScalingGroupProvider:
+        AutoScalingGroupArn: !Ref GpuAutoScalingGroup
+        ManagedScaling:
+          Status: ENABLED
+          TargetCapacity: 100
+          MinimumScalingStepSize: 1
+          MaximumScalingStepSize: 1
+        ManagedTerminationProtection: DISABLED
+
+  # Associate GPU capacity provider with the cluster
+  ClusterCapacityProviderAssociation:
+    Type: AWS::ECS::ClusterCapacityProviderAssociations
+    Properties:
+      Cluster: !Ref ECSCluster
+      CapacityProviders:
+        - !Ref GpuCapacityProvider
+      DefaultCapacityProviderStrategy: []
+
+  # GPU task definition — EC2 launch type, 1x GPU, CUDA image
+  GpuTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub "camrie-gpu-task-${StageName}"
+      NetworkMode: awsvpc
+      RequiresCompatibilities: [EC2]
+      ExecutionRoleArn: !GetAtt FargateTaskExecutionRole.Arn
+      TaskRoleArn:      !GetAtt FargateTaskRole.Arn
+      ContainerDefinitions:
+        - Name: camrie-worker
+          Image: !Ref GpuImageUri
+          Essential: true
+          ResourceRequirements:
+            - Type: GPU
+              Value: "1"
+          Memory: 14000
+          Cpu: 4096
+          Environment:
+            - Name: ResultsBucketName
+              Value: !Ref ResultsBucketPName
+            - Name: FailedBucketName
+              Value: !Ref FailedBucketPName
+            - Name: CAMRIE_THREADS
+              Value: "4"
+            - Name: NVIDIA_VISIBLE_DEVICES
+              Value: all
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group:  !Ref GpuLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: camrie-gpu
+
+  GpuLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/ecs/camrie-gpu-${StageName}"
+      RetentionInDays: 30
+
   # ── RunJobLambda (routes job → Fargate) ─────────────────────────────────────
   RunJobLambda:
     Type: AWS::Serverless::Function
@@ -165,12 +314,14 @@ Resources:
               Resource: !Sub "arn:aws:s3:::${DataBucketPName}/_camrie_events/*"
       Environment:
         Variables:
-          CLUSTER_ARN:   !GetAtt ECSCluster.Arn
-          TASK_DEF_ARN:  !Ref FargateTaskDefinition
-          SUBNET_1:      !Ref SubnetId1
-          SUBNET_2:      !Ref SubnetId2
-          SECURITY_GROUP: !Ref SecurityGroupIds
-          DATA_BUCKET:   !Ref DataBucketPName
+          CLUSTER_ARN:          !GetAtt ECSCluster.Arn
+          TASK_DEF_ARN:         !Ref FargateTaskDefinition
+          GPU_TASK_DEF_ARN:     !Ref GpuTaskDefinition
+          GPU_CAPACITY_PROVIDER: !Ref GpuCapacityProvider
+          SUBNET_1:             !Ref SubnetId1
+          SUBNET_2:             !Ref SubnetId2
+          SECURITY_GROUP:       !Ref SecurityGroupIds
+          DATA_BUCKET:          !Ref DataBucketPName
       InlineCode: |
         import json, os, uuid, boto3
 
@@ -178,42 +329,59 @@ Resources:
             ecs = boto3.client("ecs")
             s3  = boto3.client("s3")
 
-            # Write the full event JSON to S3 to avoid the 8192-char ECS
-            # containerOverrides limit (presigned URLs make the payload huge).
+            # Detect GPU request from simulation options
+            opts    = event.get("options", {}) if isinstance(event, dict) else {}
+            sim     = opts.get("simulation", {}) if isinstance(opts, dict) else {}
+            use_gpu = str(sim.get("use_gpu", False)).lower() in ("true", "1", "yes")
+
+            # Write large event JSON to S3 to avoid 8192-char ECS override limit
             data_bucket = os.environ.get("DATA_BUCKET", "")
             event_json  = json.dumps(event)
-
             if len(event_json) > 7000 and data_bucket:
-                event_key = f"_camrie_events/{uuid.uuid4()}.json"
+                event_key        = f"_camrie_events/{uuid.uuid4()}.json"
                 s3.put_object(Bucket=data_bucket, Key=event_key, Body=event_json.encode())
                 file_event_value = json.dumps({"s3_event_bucket": data_bucket, "s3_event_key": event_key})
-                print(f"Event too large ({len(event_json)} chars), stored at s3://{data_bucket}/{event_key}")
+                print(f"Stored event at s3://{data_bucket}/{event_key}")
             else:
                 file_event_value = event_json
 
-            response = ecs.run_task(
-                cluster=os.environ["CLUSTER_ARN"],
-                taskDefinition=os.environ["TASK_DEF_ARN"],
-                launchType="FARGATE",
-                networkConfiguration={
-                    "awsvpcConfiguration": {
-                        "subnets": [
-                            os.environ["SUBNET_1"],
-                            os.environ["SUBNET_2"],
-                        ],
-                        "securityGroups": [os.environ["SECURITY_GROUP"]],
-                        "assignPublicIp": "ENABLED",
-                    }
-                },
-                overrides={
-                    "containerOverrides": [{
-                        "name": "camrie-worker",
-                        "environment": [
-                            {"name": "FILE_EVENT", "value": file_event_value}
-                        ],
-                    }]
-                },
-            )
+            network_cfg = {
+                "awsvpcConfiguration": {
+                    "subnets":        [os.environ["SUBNET_1"], os.environ["SUBNET_2"]],
+                    "securityGroups": [os.environ["SECURITY_GROUP"]],
+                    "assignPublicIp": "ENABLED",
+                }
+            }
+            overrides = {
+                "containerOverrides": [{
+                    "name": "camrie-worker",
+                    "environment": [{"name": "FILE_EVENT", "value": file_event_value}],
+                }]
+            }
+
+            gpu_task_def  = os.environ.get("GPU_TASK_DEF_ARN", "")
+            gpu_cap_prov  = os.environ.get("GPU_CAPACITY_PROVIDER", "")
+
+            if use_gpu and gpu_task_def and gpu_cap_prov:
+                print("GPU requested — routing to EC2/GPU task")
+                response = ecs.run_task(
+                    cluster=os.environ["CLUSTER_ARN"],
+                    taskDefinition=gpu_task_def,
+                    capacityProviderStrategy=[{"capacityProvider": gpu_cap_prov, "weight": 1}],
+                    networkConfiguration=network_cfg,
+                    overrides=overrides,
+                )
+            else:
+                if use_gpu:
+                    print("GPU requested but GPU path not configured — falling back to CPU/Fargate")
+                response = ecs.run_task(
+                    cluster=os.environ["CLUSTER_ARN"],
+                    taskDefinition=os.environ["TASK_DEF_ARN"],
+                    launchType="FARGATE",
+                    networkConfiguration=network_cfg,
+                    overrides=overrides,
+                )
+
             tasks = response.get("tasks", [])
             if not tasks:
                 raise RuntimeError(f"ECS RunTask failed: {response.get('failures')}")
@@ -278,3 +446,15 @@ Outputs:
     Value: !GetAtt ECSCluster.Arn
     Export:
       Name: !Sub "${AWS::StackName}-ECSClusterArn"
+
+  GpuCapacityProviderName:
+    Description: Name of the GPU ECS capacity provider
+    Value: !Ref GpuCapacityProvider
+    Export:
+      Name: !Sub "${AWS::StackName}-GpuCapacityProvider"
+
+  GpuLogGroupName:
+    Description: CloudWatch log group for GPU tasks
+    Value: !Ref GpuLogGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-GpuLogGroup"
