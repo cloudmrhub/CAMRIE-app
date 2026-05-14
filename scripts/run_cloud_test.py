@@ -213,7 +213,7 @@ def wait_for_log_stream(log_group, task_id, aws_profile, aws_region, timeout=180
     t0 = time.time()
     last_msg = 0
     print(f"  Waiting for log stream: {prefix}")
-    print(f"  (GPU: Julia loads precompiled cache, then CUDA PTX JIT — silent for up to 15 min)")
+    print(f"  (GPU: Julia loads precompiled cache (~30s), then CUDA PTX JIT (~5-10 min on fresh instance)")
     while time.time() - t0 < timeout:
         elapsed = time.time() - t0
         try:

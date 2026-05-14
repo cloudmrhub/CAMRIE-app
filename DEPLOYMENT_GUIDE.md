@@ -62,7 +62,18 @@ GPU resources are gated by the `GpuEnabled` condition — if `GpuImageUri` is em
 
 ### Julia depot / CUDA PTX cache
 
-The GPU container mounts `/opt/julia-depot-cache` from the EC2 host into `/opt/julia-depot` inside the container. This persists compiled CUDA PTX kernels across tasks on the **same instance**. The first task on a fresh instance pays a one-time JIT cost (~5–10 min); all subsequent tasks on the same warm instance start in ~30 s.
+The GPU task definition uses a host bind-mount with a two-path `JULIA_DEPOT_PATH`:
+
+```
+Host /opt/julia-depot-cache  →  container /opt/julia-depot-cache   (read/write, persistent)
+Image /opt/julia-depot        →  container /opt/julia-depot          (read-only, baked in image)
+
+JULIA_DEPOT_PATH=/opt/julia-depot-cache:/opt/julia-depot
+```
+
+Julia reads packages from the image's precompiled depot (`/opt/julia-depot`) and writes newly compiled caches (CUDA PTX kernels etc.) to the host-mounted path (`/opt/julia-depot-cache`). PTX kernels persist across tasks on the **same instance**.
+
+**Important**: do NOT mount the host path directly over `/opt/julia-depot`. That shadows the image's precompiled packages, forcing Julia to recompile everything from scratch (~30–60 min of silence on first start).
 
 ---
 
@@ -292,9 +303,9 @@ python scripts/run_cloud_test.py \
 
 Expected timeline on **first task on a fresh instance**:
 - 0–90 s: EC2 instance provisions + image pull → ECS status `RUNNING`
-- 90 s – ~10 min: Julia/CUDA PTX JIT (silent — log stream not yet written)
+- 90 s – ~10 min: CUDA PTX JIT (Julia package load is fast ~30 s; only PTX is slow)
 - ~10 min: First log line appears, simulation begins
-- **Second task on same warm instance**: logs appear in ~30 s
+- **Second task on same warm instance**: logs appear in ~30 s (PTX cache hit)
 
 ---
 
@@ -460,7 +471,7 @@ python scripts/run_cloud_test.py \
 |---|---|---|
 | PROVISIONING | 30–90 s | ASG launches `g4dn.xlarge`; instance registers with ECS |
 | PENDING | 10–30 s | Docker pulls GPU image from ECR |
-| RUNNING (silent) | 5–15 min (cold) / ~30 s (warm) | Julia loads precompiled packages; CUDA PTX kernels JIT-compiled for T4; nothing written to logs yet |
+| RUNNING (silent) | 5–10 min (cold) / ~30 s (warm) | Julia loads precompiled packages from image depot (~30s); CUDA PTX kernels JIT-compiled for T4 (~5–10 min, first task on fresh instance only); nothing written to logs yet |
 | RUNNING (active) | simulation duration | Julia/KomaMRI computes; logs stream continuously |
 | STOPPED | — | Results uploaded to S3; container exits 0 |
 
@@ -597,6 +608,12 @@ aws logs tail /ecs/camrie-gpu-Prod \
 Verify the image has the correct Julia config:
 - `JULIA_CPU_TARGET=generic` (a specific µarch like `haswell` causes full recompilation on a different CPU generation)
 - `JULIA_PKG_DISABLE_PKGIMAGES` **must not be set** in the GPU image (it forces recompilation of all packages on every container start)
+
+Also verify the depot mount is correct in the task definition:
+- `ContainerPath` must be `/opt/julia-depot-cache` (NOT `/opt/julia-depot`)
+- `JULIA_DEPOT_PATH` must be `/opt/julia-depot-cache:/opt/julia-depot`
+
+Mounting the host path directly over `/opt/julia-depot` shadows the image's precompiled packages, causing Julia to silently recompile everything from scratch on every cold start (~30–60 min).
 
 ### assignPublicIp error with GPU tasks
 
