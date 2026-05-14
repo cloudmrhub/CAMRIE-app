@@ -427,8 +427,14 @@ def download_result(results, output_dir, aws_profile, aws_region):
     bucket = None
     key    = None
 
-    # Try direct fields first
-    if isinstance(results, dict):
+    # results may be a plain S3 URL string: "s3://bucket/key"
+    if isinstance(results, str) and results.startswith("s3://"):
+        parts  = results[5:].split("/", 1)
+        bucket = parts[0]
+        key    = parts[1] if len(parts) > 1 else None
+
+    # Or a dict with bucket/key fields
+    elif isinstance(results, dict):
         bucket = results.get("bucket") or results.get("Bucket")
         key    = results.get("key")    or results.get("Key")
         # Some responses nest under 'output' or 'data'
@@ -437,6 +443,14 @@ def download_result(results, output_dir, aws_profile, aws_region):
                 if isinstance(sub, dict):
                     bucket = bucket or sub.get("bucket") or sub.get("Bucket")
                     key    = key    or sub.get("key")    or sub.get("Key")
+        # Also handle a plain S3 URL stored as a value inside the dict
+        if not key:
+            for v in results.values():
+                if isinstance(v, str) and v.startswith("s3://"):
+                    parts  = v[5:].split("/", 1)
+                    bucket = parts[0]
+                    key    = parts[1] if len(parts) > 1 else None
+                    break
 
     # Fallback: scan the results bucket for the most recent zip
     if not key:
