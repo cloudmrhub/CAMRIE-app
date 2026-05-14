@@ -403,7 +403,7 @@ def monitor_ecs_task(task_arn, cluster, aws_profile, aws_region, use_gpu=False):
 
 def download_result(results, output_dir, aws_profile, aws_region):
     """
-    Download and unzip the simulation result from S3.
+    Download the simulation result zip from S3.
 
     Expects results dict with 'bucket' and 'key' (as uploaded by the pipeline).
     Falls back to scanning the results S3 bucket for the most recent zip if
@@ -415,7 +415,7 @@ def download_result(results, output_dir, aws_profile, aws_region):
         aws_profile: AWS CLI profile
         aws_region:  AWS region
     """
-    import zipfile
+
     import io
 
     output_dir = Path(output_dir)
@@ -485,19 +485,7 @@ def download_result(results, output_dir, aws_profile, aws_region):
         fail(f"S3 download failed: {e}")
         return
 
-    ok(f"Downloaded {local_zip.stat().st_size / 1024:.1f} KB")
-
-    # Unzip
-    info(f"Extracting to {output_dir} ...")
-    try:
-        with zipfile.ZipFile(local_zip, "r") as zf:
-            zf.extractall(output_dir)
-        extracted = [str(p.relative_to(output_dir)) for p in output_dir.rglob("*") if p.is_file() and p != local_zip]
-        ok(f"Extracted {len(extracted)} file(s):")
-        for f in extracted:
-            print(f"    {f}")
-    except zipfile.BadZipFile as e:
-        fail(f"Could not unzip {local_zip}: {e}")
+    ok(f"Downloaded {local_zip.stat().st_size / 1024:.1f} KB → {local_zip}")
 
 
 def tail_logs_blocking(log_group, aws_profile, aws_region, task_id=None):
@@ -626,7 +614,7 @@ def main():
                         help="Skip upload/submit — just tail logs for a Fargate task ID "
                              "(e.g. 74f378a959ff4ba4be598326ef73cf13)")
     parser.add_argument("--output-dir", default=None, metavar="DIR",
-                        help="Download and unzip the result zip into this directory "
+                        help="Download the result zip into this directory "
                              "when the simulation completes")
 
     args = parser.parse_args()
