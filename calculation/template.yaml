@@ -268,9 +268,11 @@ Resources:
           MemoryReservation: 12000  # soft limit; hard cap is task-level Memory
           MountPoints:
             - SourceVolume: julia-depot-cache
-              ContainerPath: /opt/julia-depot
+              ContainerPath: /opt/julia-depot-cache
               ReadOnly: false
           Environment:
+            - Name: JULIA_DEPOT_PATH
+              Value: "/opt/julia-depot-cache:/opt/julia-depot"
             - Name: ResultsBucketName
               Value: !Ref ResultsBucketPName
             - Name: FailedBucketName
@@ -284,8 +286,11 @@ Resources:
               awslogs-region: !Ref AWS::Region
               awslogs-stream-prefix: camrie-gpu
       # Host bind-mount: persists Julia/CUDA compiled kernels across tasks
-      # on the same EC2 instance. First task on a fresh instance still pays
-      # the PTX JIT cost; all subsequent tasks on the same instance start fast.
+      # on the same EC2 instance.
+      # IMPORTANT: mount to /opt/julia-depot-cache (not /opt/julia-depot) so the
+      # image's precompiled package depot is not shadowed. JULIA_DEPOT_PATH is set
+      # to /opt/julia-depot-cache:/opt/julia-depot so Julia reads from the image
+      # depot and writes new caches (CUDA PTX etc.) to the persistent host path.
       Volumes:
         - Name: julia-depot-cache
           Host:
