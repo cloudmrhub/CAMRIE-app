@@ -15,6 +15,13 @@ Pkg.add(["KomaMRI", "NPZ", "JSON", "HDF5", "LinearAlgebra"])
 # The NVIDIA driver is provided by the EC2 GPU instance at runtime.
 Pkg.add("CUDA")
 
+# CRITICAL: set the CUDA runtime version preference NOW (at build time, without a GPU).
+# Without this, CUDA.jl tries to auto-detect from the driver (libcuda.so) at startup —
+# which fails because docker build has no GPU. Setting this writes to LocalPreferences.toml
+# so CUDA.jl loads the CUDA 12.6 JLL artifact (bundled with the package) at container start.
+using CUDA
+CUDA.set_runtime_version!(v"12.6"; local_toolkit=false)
+
 Pkg.precompile()
 
 # Verify cache in fresh session (build fails here if broken, not at runtime)
