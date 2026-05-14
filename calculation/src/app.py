@@ -350,8 +350,16 @@ def do_process(event, context=None, s3=None):
         write_json_file(str(error_dir / "event.json"),   event)
         write_json_file(str(error_dir / "options.json"), info_json)
         (error_dir / "error.txt").write_text(error_formatted)
+        # info.json must match the format complete.py expects:
+        #   info["headers"]["options"]["pipelineid"] and info["user_id"]
         write_json_file(str(error_dir / "info.json"), {
-            "headers": {"token": token, "pipelineid": pipelineid},
+            "headers": {
+                "options": {
+                    "pipelineid": pipelineid,
+                    "pipeline": pipelineid,
+                    "token": token,
+                }
+            },
             "log": logger.log,
             "user_id": user_id,
         })
