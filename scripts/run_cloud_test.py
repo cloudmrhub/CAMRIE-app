@@ -401,6 +401,91 @@ def monitor_ecs_task(task_arn, cluster, aws_profile, aws_region, use_gpu=False):
             "cold_s": cold_s, "cost_usd": cost}
 
 
+def download_result(results, output_dir, aws_profile, aws_region):
+    """
+    Download and unzip the simulation result from S3.
+
+    Expects results dict with 'bucket' and 'key' (as uploaded by the pipeline).
+    Falls back to scanning the results S3 bucket for the most recent zip if
+    the pipeline response does not carry explicit bucket/key fields.
+
+    Args:
+        results:    dict from pipeline response (may contain bucket/key)
+        output_dir: local directory to extract into (created if needed)
+        aws_profile: AWS CLI profile
+        aws_region:  AWS region
+    """
+    import zipfile
+    import io
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    sess = boto3.Session(profile_name=aws_profile, region_name=aws_region)
+    s3 = sess.client("s3")
+
+    bucket = None
+    key    = None
+
+    # Try direct fields first
+    if isinstance(results, dict):
+        bucket = results.get("bucket") or results.get("Bucket")
+        key    = results.get("key")    or results.get("Key")
+        # Some responses nest under 'output' or 'data'
+        if not key:
+            for sub in (results.get("output") or {}, results.get("data") or {}):
+                if isinstance(sub, dict):
+                    bucket = bucket or sub.get("bucket") or sub.get("Bucket")
+                    key    = key    or sub.get("key")    or sub.get("Key")
+
+    # Fallback: scan the results bucket for the most recent zip
+    if not key:
+        default_bucket = "cloudmr-results-cloudmrhub-brain-us-east-1"
+        bucket = bucket or default_bucket
+        info(f"No explicit S3 key in results — scanning {bucket} for most recent zip...")
+        try:
+            resp = s3.list_objects_v2(Bucket=bucket, MaxKeys=20)
+            zips = [o for o in resp.get("Contents", []) if o["Key"].endswith(".zip")]
+            if zips:
+                zips.sort(key=lambda o: o["LastModified"], reverse=True)
+                key = zips[0]["Key"]
+                info(f"Found: {key}  (last modified {zips[0]['LastModified']}")
+            else:
+                fail("No zip files found in results bucket.")
+                return
+        except Exception as e:
+            fail(f"Could not list results bucket: {e}")
+            return
+
+    zip_name = Path(key).name
+    local_zip = output_dir / zip_name
+
+    print(f"\n═══ Step 6: Download Results ═══")
+    info(f"Bucket: {bucket}")
+    info(f"Key:    {key}")
+    info(f"Downloading → {local_zip} ...")
+
+    try:
+        s3.download_file(bucket, key, str(local_zip))
+    except Exception as e:
+        fail(f"S3 download failed: {e}")
+        return
+
+    ok(f"Downloaded {local_zip.stat().st_size / 1024:.1f} KB")
+
+    # Unzip
+    info(f"Extracting to {output_dir} ...")
+    try:
+        with zipfile.ZipFile(local_zip, "r") as zf:
+            zf.extractall(output_dir)
+        extracted = [str(p.relative_to(output_dir)) for p in output_dir.rglob("*") if p.is_file() and p != local_zip]
+        ok(f"Extracted {len(extracted)} file(s):")
+        for f in extracted:
+            print(f"    {f}")
+    except zipfile.BadZipFile as e:
+        fail(f"Could not unzip {local_zip}: {e}")
+
+
 def tail_logs_blocking(log_group, aws_profile, aws_region, task_id=None):
     """Tail CloudWatch logs until interrupted. Optionally filter by task ID."""
     cmd = [
@@ -526,6 +611,9 @@ def main():
     parser.add_argument("--logs-only", default=None, metavar="TASK_ID",
                         help="Skip upload/submit — just tail logs for a Fargate task ID "
                              "(e.g. 74f378a959ff4ba4be598326ef73cf13)")
+    parser.add_argument("--output-dir", default=None, metavar="DIR",
+                        help="Download and unzip the result zip into this directory "
+                             "when the simulation completes")
 
     args = parser.parse_args()
 
@@ -653,6 +741,13 @@ def main():
             ok(f"Simulation completed!")
             if final.get("results"):
                 info(f"Results: {json.dumps(final['results'], indent=2)}")
+            if args.output_dir:
+                download_result(
+                    final.get("results") or {},
+                    args.output_dir,
+                    args.aws_profile,
+                    args.aws_region,
+                )
         else:
             fail(f"Simulation ended with status: {status}")
             if final.get("log"):
