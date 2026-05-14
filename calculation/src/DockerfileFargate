@@ -25,7 +25,7 @@ ENV JULIA_DEPOT_PATH=/opt/julia-depot
 # Multi-target CPU codegen: the build host (GitHub Actions) likely differs from
 # Fargate hardware.  Without this Julia precompiles only for the build CPU and
 # the cache is invalidated at runtime on a different µarch → full recompile.
-ENV JULIA_CPU_TARGET="generic;sandybridge,-xsaveopt,clone_all;haswell,clone_all"
+ENV JULIA_CPU_TARGET="generic"
 
 # Disable native shared-library package images (.so) to avoid linker issues in
 # Docker slim images.  Classic .ji precompile caches are portable and load in

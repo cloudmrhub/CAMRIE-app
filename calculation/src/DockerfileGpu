@@ -30,8 +30,11 @@ RUN wget -q https://julialang-s3.julialang.org/bin/linux/x64/1.11/julia-${JULIA_
 
 # ── Julia environment ────────────────────────────────────────────────────────
 ENV JULIA_DEPOT_PATH=/opt/julia-depot
-ENV JULIA_CPU_TARGET="generic;sandybridge,-xsaveopt,clone_all;haswell,clone_all"
-ENV JULIA_PKG_DISABLE_PKGIMAGES=true
+# generic = portable cache across any x86_64 microarchitecture (sandybridge/haswell/skylake/znver etc.)
+# This is critical: if the build runner CPU != EC2 CPU, Julia rejects specific-target .ji files
+# and silently recompiles everything from scratch at container startup.
+ENV JULIA_CPU_TARGET="generic"
+# Do NOT set JULIA_PKG_DISABLE_PKGIMAGES — that disables the cache entirely
 
 # ── Pre-install Julia packages including CUDA.jl ─────────────────────────────
 COPY install_julia_deps_gpu.jl /tmp/install_julia_deps_gpu.jl
