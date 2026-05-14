@@ -25,6 +25,10 @@ on:
         default: false
         type: boolean
 
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false   # queue rather than cancel; safer for CloudFormation
+
 env:
   AWS_REGION: us-east-1
   STACK_NAME: camrie-app-prod
