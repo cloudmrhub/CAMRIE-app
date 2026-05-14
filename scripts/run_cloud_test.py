@@ -23,8 +23,10 @@ import os
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
+import boto3
 import requests
 
 # ─── Defaults ──────────────────────────────────────────────────────────────────
@@ -206,6 +208,143 @@ def stream_log_lines(proc, max_lines=None):
     return count
 
 
+# ─── GPU / ECS monitoring ─────────────────────────────────────────────────────
+# On-demand prices us-east-1 (update if needed)
+_COST_PER_HOUR = {
+    "g4dn.xlarge":  0.526,
+    "g5.xlarge":    1.006,
+    "fargate":      0.210,   # 4 vCPU + 16 GB approx
+}
+
+
+def _boto_session(aws_profile, aws_region):
+    return boto3.Session(profile_name=aws_profile, region_name=aws_region)
+
+
+def find_ecs_task_from_execution(execution_arn, cluster, aws_profile, aws_region):
+    """Return the ECS task ARN launched by a Step Functions execution."""
+    sess = _boto_session(aws_profile, aws_region)
+    sfn  = sess.client("stepfunctions")
+    ecs  = sess.client("ecs")
+    try:
+        history = sfn.get_execution_history(executionArn=execution_arn, maxResults=20)
+        for ev in history["events"]:
+            detail = ev.get("taskSucceededEventDetails") or ev.get("taskStateExitedEventDetails")
+            if detail:
+                out = json.loads(detail.get("output", "{}"))
+                arn = out.get("taskArn")
+                if arn:
+                    return arn
+        # Fallback: list recent tasks in cluster
+        for state in ("RUNNING", "PENDING", "STOPPED"):
+            resp = ecs.list_tasks(cluster=cluster, desiredStatus=state)
+            if resp["taskArns"]:
+                return resp["taskArns"][0]
+    except Exception as e:
+        info(f"Could not resolve ECS task ARN: {e}")
+    return None
+
+
+def monitor_ecs_task(task_arn, cluster, aws_profile, aws_region, use_gpu=False):
+    """
+    Poll ECS task lifecycle and print stage transitions with timestamps.
+    Returns a dict with timing info for cost calculation.
+    """
+    if not task_arn:
+        return {}
+
+    sess = _boto_session(aws_profile, aws_region)
+    ecs  = sess.client("ecs")
+    task_id = task_arn.split("/")[-1]
+    instance_type = "g4dn.xlarge" if use_gpu else "fargate"
+
+    print(f"\n═══ ECS Task Monitor ═══")
+    info(f"Task: {task_id}")
+    info(f"Instance: {instance_type}")
+
+    seen_status   = None
+    t_submitted   = time.time()
+    t_running     = None
+    t_stopped     = None
+    last_ec2_msg  = None
+
+    for _ in range(120):   # up to 30 min
+        try:
+            resp  = ecs.describe_tasks(cluster=cluster, tasks=[task_arn])
+            tasks = resp.get("tasks", [])
+            if not tasks:
+                time.sleep(15)
+                continue
+            task   = tasks[0]
+            status = task["lastStatus"]
+
+            if status != seen_status:
+                elapsed = time.time() - t_submitted
+                ts      = datetime.now().strftime("%H:%M:%S")
+                if status == "PROVISIONING":
+                    print(f"  [{ts}] +{elapsed:5.0f}s  PROVISIONING  (waiting for EC2 instance to register)")
+                elif status == "PENDING":
+                    print(f"  [{ts}] +{elapsed:5.0f}s  PENDING       (instance ready, pulling image)")
+                elif status == "RUNNING":
+                    t_running = time.time()
+                    cold = elapsed
+                    print(f"  [{ts}] +{elapsed:5.0f}s  RUNNING       (container started — cold start was {cold:.0f}s)")
+                elif status == "DEPROVISIONING":
+                    print(f"  [{ts}] +{elapsed:5.0f}s  DEPROVISIONING")
+                elif status == "STOPPED":
+                    t_stopped = time.time()
+                    reason = task.get("stoppedReason", "")
+                    exit_code = None
+                    for c in task.get("containers", []):
+                        if c.get("exitCode") is not None:
+                            exit_code = c["exitCode"]
+                    print(f"  [{ts}] +{elapsed:5.0f}s  STOPPED       exit={exit_code} reason={reason}")
+                seen_status = status
+
+            if status == "STOPPED":
+                break
+
+            # For GPU: show capacity provider activity message once
+            if use_gpu and status == "PROVISIONING":
+                try:
+                    for attr in task.get("attributes", []):
+                        if "capacityProvider" in attr.get("name", ""):
+                            msg = attr.get("value", "")
+                            if msg and msg != last_ec2_msg:
+                                info(f"  CP: {msg}")
+                                last_ec2_msg = msg
+                except Exception:
+                    pass
+
+        except Exception as e:
+            info(f"ECS describe error: {e}")
+
+        time.sleep(15)
+
+    # Cost summary
+    total_s   = (t_stopped or time.time()) - t_submitted
+    running_s = (t_stopped or time.time()) - (t_running or t_submitted)
+    cold_s    = total_s - running_s
+    rate      = _COST_PER_HOUR.get(instance_type, 0)
+    # EC2 billing: per-second, minimum 60s
+    billed_s  = max(running_s, 60) if use_gpu else running_s
+    cost      = (billed_s / 3600) * rate
+
+    print(f"\n  ── Cost estimate ({instance_type}) ──")
+    print(f"  Cold start:    {cold_s:6.0f}s  (not billed for Fargate; EC2 billed from launch)")
+    print(f"  Simulation:    {running_s:6.0f}s")
+    print(f"  Total:         {total_s:6.0f}s")
+    print(f"  Rate:          ${rate:.4f}/hr")
+    print(f"  Est. cost:     ${cost:.4f}")
+    if use_gpu:
+        ec2_s = total_s   # EC2 billed from the moment instance starts
+        ec2_cost = (max(ec2_s, 60) / 3600) * rate
+        print(f"  EC2 full run:  ${ec2_cost:.4f}  (instance billed from PROVISIONING)")
+
+    return {"task_id": task_id, "total_s": total_s, "running_s": running_s,
+            "cold_s": cold_s, "cost_usd": cost}
+
+
 def tail_logs_blocking(log_group, aws_profile, aws_region, task_id=None):
     """Tail CloudWatch logs until interrupted. Optionally filter by task ID."""
     cmd = [
@@ -320,15 +459,23 @@ def main():
                         help="AWS CLI profile for log tailing (default: nyu)")
     parser.add_argument("--aws-region", default="us-east-1",
                         help="AWS region (default: us-east-1)")
-    parser.add_argument("--log-group", default="/ecs/camrie-Prod",
-                        help="CloudWatch log group (default: /ecs/camrie-Prod)")
+    parser.add_argument("--log-group", default=None,
+                        help="CloudWatch log group (auto: /ecs/camrie-Prod or /ecs/camrie-gpu-Prod)")
     parser.add_argument("--tail-logs", action="store_true",
-                        help="Tail Fargate CloudWatch logs while polling")
+                        help="Tail CloudWatch logs while polling")
+    parser.add_argument("--monitor-task", action="store_true",
+                        help="Monitor ECS task lifecycle and show cost estimate (GPU recommended)")
+    parser.add_argument("--cluster", default="camrie-app-prod-cluster",
+                        help="ECS cluster name")
     parser.add_argument("--logs-only", default=None, metavar="TASK_ID",
                         help="Skip upload/submit — just tail logs for a Fargate task ID "
                              "(e.g. 74f378a959ff4ba4be598326ef73cf13)")
 
     args = parser.parse_args()
+
+    # Auto-select log group
+    if not args.log_group:
+        args.log_group = "/ecs/camrie-gpu-Prod" if args.use_gpu else "/ecs/camrie-Prod"
 
     # ── Logs-only mode ─────────────────────────────────────────────────────
     if args.logs_only:
@@ -390,9 +537,15 @@ def main():
     }
     result = queue_job(args.api_base, token, file_keys, sim_config)
     pipeline_id = result.get("pipeline")
+    execution_arn = result.get('executionArn', '')
     ok(f"Job queued!")
     info(f"Pipeline:      {pipeline_id}")
-    info(f"Execution ARN: {result.get('executionArn')}")
+    info(f"Execution ARN: {execution_arn}")
+    info(f"Log group:     {args.log_group}")
+    if args.use_gpu:
+        info(f"Compute:       GPU (g4dn.xlarge / EC2-backed ECS)")
+    else:
+        info(f"Compute:       CPU (Fargate 4vCPU/16GB)")
     if result.get("computingUnit"):
         cu = result["computingUnit"]
         info(f"Computing Unit: {cu.get('alias')} ({cu.get('mode')}) id={cu.get('id')}")
@@ -402,8 +555,26 @@ def main():
         print(f"  GET {args.api_base}/pipeline/{pipeline_id}")
         return
 
-    # ── Step 4: Poll ───────────────────────────────────────────────────────────
-    print(f"\n═══ Step 4: Polling (timeout={args.timeout}s) ═══")
+    # ── Step 4: ECS task monitor (optional) ───────────────────────────────────
+    if args.monitor_task or args.use_gpu:
+        # Give Step Functions a moment to launch the ECS task
+        info("Waiting 10s for ECS task to be registered...")
+        time.sleep(10)
+        task_arn = find_ecs_task_from_execution(
+            execution_arn, args.cluster, args.aws_profile, args.aws_region)
+        if task_arn:
+            import threading
+            monitor_thread = threading.Thread(
+                target=monitor_ecs_task,
+                args=(task_arn, args.cluster, args.aws_profile, args.aws_region, args.use_gpu),
+                daemon=True,
+            )
+            monitor_thread.start()
+        else:
+            info("Could not find ECS task ARN — skipping task monitor")
+
+    # ── Step 5: Poll ───────────────────────────────────────────────────────────
+    print(f"\n═══ Step 5: Polling (timeout={args.timeout}s) ═══")
 
     log_proc = None
     if args.tail_logs:
