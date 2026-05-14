@@ -266,6 +266,10 @@ Resources:
             - Type: GPU
               Value: "1"
           MemoryReservation: 12000  # soft limit; hard cap is task-level Memory
+          MountPoints:
+            - SourceVolume: julia-depot-cache
+              ContainerPath: /opt/julia-depot
+              ReadOnly: false
           Environment:
             - Name: ResultsBucketName
               Value: !Ref ResultsBucketPName
@@ -279,6 +283,13 @@ Resources:
               awslogs-group:  !Ref GpuLogGroup
               awslogs-region: !Ref AWS::Region
               awslogs-stream-prefix: camrie-gpu
+      # Host bind-mount: persists Julia/CUDA compiled kernels across tasks
+      # on the same EC2 instance. First task on a fresh instance still pays
+      # the PTX JIT cost; all subsequent tasks on the same instance start fast.
+      Volumes:
+        - Name: julia-depot-cache
+          Host:
+            SourcePath: /opt/julia-depot-cache
 
   GpuLogGroup:
     Type: AWS::Logs::LogGroup

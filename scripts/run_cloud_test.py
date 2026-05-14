@@ -171,7 +171,7 @@ def queue_job(base_url, token, file_keys, sim_config):
     return r.json()
 
 
-def start_log_tail(log_group, aws_profile, aws_region, since="1m"):
+def start_log_tail(log_group, aws_profile, aws_region, since="1m", task_id=None):
     """Start a background process that tails CloudWatch logs."""
     cmd = [
         "aws", "logs", "tail", log_group,
@@ -181,13 +181,69 @@ def start_log_tail(log_group, aws_profile, aws_region, since="1m"):
         "--region", aws_region,
         "--format", "short",
     ]
-    info(f"Tailing logs: {log_group} (Ctrl+C to stop)")
+    # Derive stream prefix from task_id.
+    # Fargate stream: camrie/camrie-worker/{task_id}
+    # GPU stream:     camrie-gpu/camrie-worker/{task_id}
+    if task_id:
+        if "gpu" in log_group:
+            prefix = f"camrie-gpu/camrie-worker/{task_id}"
+        else:
+            prefix = f"camrie/camrie-worker/{task_id}"
+        cmd.extend(["--log-stream-name-prefix", prefix])
+    info(f"Tailing logs: {log_group}" + (f" (task {task_id})" if task_id else ""))
     try:
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         return proc
     except FileNotFoundError:
-        fail("AWS CLI not found — cannot tail logs. Install aws-cli or use --no-poll.")
+        fail("AWS CLI not found — cannot tail logs.")
         return None
+
+
+def wait_for_log_stream(log_group, task_id, aws_profile, aws_region, timeout=1800):
+    """
+    Block until the task's CloudWatch log stream appears and has at least one event.
+    Prints a heartbeat every 30s so you know it's not stuck.
+    Returns True when logs appear, False on timeout.
+    """
+    import boto3
+    sess = boto3.Session(profile_name=aws_profile, region_name=aws_region)
+    cw   = sess.client("logs")
+    prefix = f"camrie-gpu/camrie-worker/{task_id}" if "gpu" in log_group \
+             else f"camrie/camrie-worker/{task_id}"
+    t0 = time.time()
+    last_msg = 0
+    print(f"  Waiting for log stream: {prefix}")
+    print(f"  (GPU: Julia loads precompiled cache, then CUDA PTX JIT — silent for up to 15 min)")
+    while time.time() - t0 < timeout:
+        elapsed = time.time() - t0
+        try:
+            resp = cw.get_log_events(
+                logGroupName=log_group,
+                logStreamName=prefix,
+                limit=5,
+                startFromHead=True,
+            )
+            if resp.get("events"):
+                print(f"  [{elapsed:.0f}s] First log line appeared — container is alive")
+                return True
+        except cw.exceptions.ResourceNotFoundException:
+            pass
+        except Exception as e:
+            pass
+        if elapsed - last_msg >= 30:
+            # Show ECS task status as heartbeat
+            try:
+                ecs = sess.client("ecs")
+                cluster = "camrie-app-prod-cluster"
+                tasks = ecs.list_tasks(cluster=cluster, desiredStatus="RUNNING")["taskArns"]
+                running = len(tasks)
+            except Exception:
+                running = "?"
+            print(f"  [{elapsed:.0f}s] Still initializing... (ECS running tasks: {running}) — waiting for first log line")
+            last_msg = elapsed
+        time.sleep(10)
+    print(f"  Timeout waiting for log stream after {timeout}s")
+    return False
 
 
 def stream_log_lines(proc, max_lines=None):
@@ -556,6 +612,7 @@ def main():
         return
 
     # ── Step 4: ECS task monitor (optional) ───────────────────────────────────
+    ecs_task_id = None
     if args.monitor_task or args.use_gpu:
         # Give Step Functions a moment to launch the ECS task
         info("Waiting 10s for ECS task to be registered...")
@@ -563,6 +620,7 @@ def main():
         task_arn = find_ecs_task_from_execution(
             execution_arn, args.cluster, args.aws_profile, args.aws_region)
         if task_arn:
+            ecs_task_id = task_arn.split("/")[-1]
             import threading
             monitor_thread = threading.Thread(
                 target=monitor_ecs_task,
@@ -578,8 +636,13 @@ def main():
 
     log_proc = None
     if args.tail_logs:
+        # For GPU: wait for the log stream to appear before starting tail
+        # (stream doesn't exist until container writes its first line)
+        if args.use_gpu and ecs_task_id:
+            wait_for_log_stream(args.log_group, ecs_task_id,
+                                args.aws_profile, args.aws_region)
         log_proc = start_log_tail(args.log_group, args.aws_profile, args.aws_region,
-                                  since="30s")
+                                  since="5m", task_id=ecs_task_id)
 
     final = poll_pipeline(args.api_base, token, pipeline_id,
                           timeout=args.timeout, interval=15,
