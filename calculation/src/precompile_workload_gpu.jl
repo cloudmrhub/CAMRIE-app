@@ -30,4 +30,4 @@ else
 end
 
 sig = simulate(obj[1:1], seq, sys; sim_params)
-println("GPU precompile signal shape: ", size(sig))
+println("GPU precompile signal type: ", typeof(sig))

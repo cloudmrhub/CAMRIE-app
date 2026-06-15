@@ -14,5 +14,4 @@ sim_params["gpu"] = false
 sim_params["Nthreads"] = 1
 
 sig = simulate(obj[1:1], seq, sys; sim_params)
-println("CPU precompile signal shape: ", size(sig))
-
+println("CPU precompile signal type: ", typeof(sig))
