@@ -85,6 +85,7 @@ fi
 echo "==> Attaching managed policies…"
 for POLICY in \
   "arn:aws:iam::aws:policy/AmazonECS_FullAccess" \
+  "arn:aws:iam::aws:policy/AWSBatchFullAccess" \
   "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryFullAccess" \
   "arn:aws:iam::aws:policy/AWSCloudFormationFullAccess" \
   "arn:aws:iam::aws:policy/IAMFullAccess" \
@@ -97,7 +98,7 @@ for POLICY in \
   echo "    Attached: ${POLICY##*/}"
 done
 
-# SAM needs PassRole to hand the execution role to ECS
+# SAM needs PassRole to hand execution roles to ECS/AWS Batch jobs.
 PASSROLE_POLICY=$(cat <<EOF
 {
   "Version": "2012-10-17",
