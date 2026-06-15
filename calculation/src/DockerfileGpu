@@ -1,13 +1,45 @@
 # ==============================================================================
 #  CAMRIE GPU image
-#  CUDA 12.6 + Python 3.11 + Julia 1.11 + KomaMRI + CUDA.jl
-#  Used with EC2-backed ECS (g4dn / g5 instances, RequiresCompatibilities: EC2)
+#  CUDA 12.6 + Python 3.11 + Julia 1.11 + KomaMRI/CUDA sysimage
+#  Used by AWS Batch on EC2 GPU Spot.
+# ==============================================================================
+FROM nvidia/cuda:12.6.3-devel-ubuntu22.04 AS julia-builder
+
+WORKDIR /build
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=Etc/UTC
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+        build-essential git ca-certificates wget curl libgomp1 \
+ && rm -rf /var/lib/apt/lists/*
+
+ARG JULIA_VERSION=1.11.4
+RUN mkdir -p /opt/julia \
+ && wget -q https://julialang-s3.julialang.org/bin/linux/x64/1.11/julia-${JULIA_VERSION}-linux-x86_64.tar.gz \
+ && tar -xzf julia-${JULIA_VERSION}-linux-x86_64.tar.gz -C /opt/julia --strip-components=1 \
+ && rm julia-${JULIA_VERSION}-linux-x86_64.tar.gz \
+ && ln -s /opt/julia/bin/julia /usr/local/bin/julia
+
+ENV JULIA_DEPOT_PATH=/opt/julia-depot
+ENV JULIA_CPU_TARGET=generic
+ENV JULIA_NUM_PRECOMPILE_TASKS=8
+ENV JULIA_CUDA_USE_BINARYBUILDER=true
+
+COPY install_julia_deps_gpu.jl /tmp/install_julia_deps_gpu.jl
+RUN julia /tmp/install_julia_deps_gpu.jl
+
+RUN julia -e 'import Pkg; Pkg.add("PackageCompiler"); Pkg.precompile()'
+COPY precompile_workload_gpu.jl /tmp/precompile_workload_gpu.jl
+RUN julia -e 'using PackageCompiler; create_sysimage([:KomaMRI, :CUDA, :NPZ, :JSON, :HDF5, :LinearAlgebra]; sysimage_path="/opt/julia-depot/komamri-gpu-sysimage.so", precompile_execution_file="/tmp/precompile_workload_gpu.jl")'
+
+# ==============================================================================
+#  Final runtime image
 # ==============================================================================
 FROM nvidia/cuda:12.6.3-runtime-ubuntu22.04
 
 WORKDIR /app
 
-# ── OS deps + Python 3.11 ────────────────────────────────────────────────────
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=Etc/UTC
 RUN apt-get update \
@@ -17,46 +49,39 @@ RUN apt-get update \
  && apt-get update \
  && apt-get install -y --no-install-recommends \
         python3.11 python3.11-venv python3.11-dev python3-pip \
-        git ca-certificates wget curl libgomp1 \
+        git ca-certificates curl libgomp1 \
  && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1 \
- && update-alternatives --install /usr/bin/python  python  /usr/bin/python3.11 1 \
+ && update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1 \
  && rm -rf /var/lib/apt/lists/*
 
-# ── Julia 1.11 ────────────────────────────────────────────────────────────────
-ARG JULIA_VERSION=1.11.4
-RUN wget -q https://julialang-s3.julialang.org/bin/linux/x64/1.11/julia-${JULIA_VERSION}-linux-x86_64.tar.gz \
- && tar -xzf julia-${JULIA_VERSION}-linux-x86_64.tar.gz -C /usr/local --strip-components=1 \
- && rm julia-${JULIA_VERSION}-linux-x86_64.tar.gz
+COPY --from=julia-builder /opt/julia /opt/julia
+COPY --from=julia-builder /opt/julia-depot /opt/julia-depot
 
-# ── Julia environment ────────────────────────────────────────────────────────
 ENV JULIA_DEPOT_PATH=/opt/julia-depot
-# generic = portable cache across any x86_64 microarchitecture (sandybridge/haswell/skylake/znver etc.)
-# This is critical: if the build runner CPU != EC2 CPU, Julia rejects specific-target .ji files
-# and silently recompiles everything from scratch at container startup.
-ENV JULIA_CPU_TARGET="generic"
-# Do NOT set JULIA_PKG_DISABLE_PKGIMAGES — that disables the cache entirely
+ENV JULIA_CPU_TARGET=generic
+ENV JULIA_CUDA_USE_BINARYBUILDER=true
+ENV CAMRIE_JULIA_SYSIMAGE=/opt/julia-depot/komamri-gpu-sysimage.so
+ENV PATH=/usr/local/bin:/opt/julia/bin:$PATH
 
-# ── Pre-install Julia packages including CUDA.jl ─────────────────────────────
-COPY install_julia_deps_gpu.jl /tmp/install_julia_deps_gpu.jl
-RUN julia /tmp/install_julia_deps_gpu.jl
+RUN printf '%s\n' \
+      '#!/bin/sh' \
+      'exec /opt/julia/bin/julia --sysimage=/opt/julia-depot/komamri-gpu-sysimage.so "$@"' \
+      > /usr/local/bin/julia \
+ && chmod +x /usr/local/bin/julia \
+ && ln -s /usr/local/bin/julia /usr/local/bin/julia-fast
 
-# ── Python deps ───────────────────────────────────────────────────────────────
 COPY requirements.txt .
 RUN python -m pip install --upgrade pip \
  && python -m pip install -r requirements.txt
 
-# ── App code ──────────────────────────────────────────────────────────────────
 COPY . .
 
-# Verify Julia cache (CUDA device check happens at runtime, not build time)
-RUN julia -e 'using KomaMRI, NPZ, JSON, HDF5, CUDA; println("GPU image precompile OK")'
+RUN julia -e 'using KomaMRI, NPZ, JSON, HDF5, CUDA; println("GPU sysimage OK")'
 
-# matplotlib & fontconfig scratch dirs
 RUN mkdir -p /tmp/.matplotlib /tmp/.fontconfig && chmod 777 /tmp/.matplotlib /tmp/.fontconfig
 ENV MPLCONFIGDIR=/tmp/.matplotlib
 ENV FONTCONFIG_PATH=/tmp/.fontconfig
 ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 ENV NVIDIA_VISIBLE_DEVICES=all
 
-# Fargate/ECS entrypoint — reads FILE_EVENT env var
 ENTRYPOINT ["python", "app.py"]

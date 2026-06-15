@@ -264,8 +264,8 @@ def stream_log_lines(proc, max_lines=None):
     return count
 
 
-# ─── GPU / ECS monitoring ─────────────────────────────────────────────────────
-# On-demand prices us-east-1 (update if needed)
+# ─── Batch / legacy ECS monitoring ────────────────────────────────────────────
+# Legacy ECS cost estimates only. Batch Spot prices vary by capacity pool.
 _COST_PER_HOUR = {
     "g4dn.xlarge":  0.526,
     "g5.xlarge":    1.006,
@@ -299,6 +299,93 @@ def find_ecs_task_from_execution(execution_arn, cluster, aws_profile, aws_region
     except Exception as e:
         info(f"Could not resolve ECS task ARN: {e}")
     return None
+
+
+def find_batch_job_from_execution(execution_arn, aws_profile, aws_region):
+    """Return the Batch submit_job response emitted by RunJobLambda."""
+    sess = _boto_session(aws_profile, aws_region)
+    sfn = sess.client("stepfunctions")
+    try:
+        history = sfn.get_execution_history(executionArn=execution_arn, maxResults=20)
+        for ev in history["events"]:
+            detail = ev.get("taskSucceededEventDetails") or ev.get("taskStateExitedEventDetails")
+            if not detail:
+                continue
+            out = json.loads(detail.get("output", "{}"))
+            if out.get("jobId"):
+                return out
+    except Exception as e:
+        info(f"Could not resolve Batch job from execution: {e}")
+    return None
+
+
+def monitor_batch_job(job_id, aws_profile, aws_region):
+    """Poll AWS Batch job lifecycle and print status transitions."""
+    if not job_id:
+        return {}
+
+    sess = _boto_session(aws_profile, aws_region)
+    batch = sess.client("batch")
+
+    print(f"\n═══ AWS Batch Job Monitor ═══")
+    info(f"Job: {job_id}")
+
+    seen_status = None
+    t_submitted = time.time()
+    t_running = None
+    t_done = None
+    compute = None
+
+    terminal = {"SUCCEEDED", "FAILED"}
+    for _ in range(160):  # up to 40 min
+        try:
+            resp = batch.describe_jobs(jobs=[job_id])
+            jobs = resp.get("jobs", [])
+            if not jobs:
+                time.sleep(15)
+                continue
+
+            job = jobs[0]
+            status = job["status"]
+            compute = job.get("parameters", {}).get("compute") or compute
+            if not compute:
+                for tag_key, tag_val in job.get("tags", {}).items():
+                    if tag_key.lower() == "compute":
+                        compute = tag_val
+
+            if status != seen_status:
+                elapsed = time.time() - t_submitted
+                ts = datetime.now().strftime("%H:%M:%S")
+                reason = job.get("statusReason", "")
+                suffix = f"  ({reason})" if reason else ""
+                print(f"  [{ts}] +{elapsed:5.0f}s  {status:<10}{suffix}")
+                if status == "RUNNING" and t_running is None:
+                    t_running = time.time()
+                if status in terminal:
+                    t_done = time.time()
+                seen_status = status
+
+            if status in terminal:
+                attempts = job.get("attempts", [])
+                if attempts:
+                    container = attempts[-1].get("container", {})
+                    exit_code = container.get("exitCode")
+                    reason = container.get("reason", "")
+                    info(f"Last attempt exit={exit_code} reason={reason}")
+                break
+        except Exception as e:
+            info(f"Batch describe error: {e}")
+
+        time.sleep(15)
+
+    total_s = (t_done or time.time()) - t_submitted
+    running_s = (t_done or time.time()) - (t_running or t_submitted)
+    print(f"\n  ── Runtime summary ({compute or 'batch'}) ──")
+    print(f"  Queue wait:     {max(0, total_s - running_s):6.0f}s")
+    print(f"  Running time:   {running_s:6.0f}s")
+    print(f"  Total tracked:  {total_s:6.0f}s")
+    print(f"  Pricing note: AWS Batch uses Spot here, so the exact EC2/Fargate rate varies.")
+    return {"total_s": total_s, "running_s": running_s, "compute": compute}
 
 
 def monitor_ecs_task(task_arn, cluster, aws_profile, aws_region, use_gpu=False):
@@ -607,11 +694,11 @@ def main():
     parser.add_argument("--tail-logs", action="store_true",
                         help="Tail CloudWatch logs while polling")
     parser.add_argument("--monitor-task", action="store_true",
-                        help="Monitor ECS task lifecycle and show cost estimate (GPU recommended)")
+                        help="Monitor AWS Batch job lifecycle; falls back to legacy ECS task monitoring")
     parser.add_argument("--cluster", default="camrie-app-prod-cluster",
-                        help="ECS cluster name")
+                        help="Legacy ECS cluster name for older deployments")
     parser.add_argument("--logs-only", default=None, metavar="TASK_ID",
-                        help="Skip upload/submit — just tail logs for a Fargate task ID "
+                        help="Skip upload/submit — just tail logs for a task/log stream ID "
                              "(e.g. 74f378a959ff4ba4be598326ef73cf13)")
     parser.add_argument("--output-dir", default=None, metavar="DIR",
                         help="Download the result zip into this directory "
@@ -689,9 +776,9 @@ def main():
     info(f"Execution ARN: {execution_arn}")
     info(f"Log group:     {args.log_group}")
     if args.use_gpu:
-        info(f"Compute:       GPU (g4dn.xlarge / EC2-backed ECS)")
+        info(f"Compute:       GPU requested (AWS Batch EC2 Spot when size threshold is met)")
     else:
-        info(f"Compute:       CPU (Fargate 4vCPU/16GB)")
+        info(f"Compute:       CPU (AWS Batch Fargate Spot)")
     if result.get("computingUnit"):
         cu = result["computingUnit"]
         info(f"Computing Unit: {cu.get('alias')} ({cu.get('mode')}) id={cu.get('id')}")
@@ -701,25 +788,37 @@ def main():
         print(f"  GET {args.api_base}/pipeline/{pipeline_id}")
         return
 
-    # ── Step 4: ECS task monitor (optional) ───────────────────────────────────
+    # ── Step 4: Batch / ECS task monitor (optional) ───────────────────────────
     ecs_task_id = None
     if args.monitor_task or args.use_gpu:
-        # Give Step Functions a moment to launch the ECS task
-        info("Waiting 10s for ECS task to be registered...")
+        # Give Step Functions a moment to submit the Batch job.
+        info("Waiting 10s for compute job to be registered...")
         time.sleep(10)
-        task_arn = find_ecs_task_from_execution(
-            execution_arn, args.cluster, args.aws_profile, args.aws_region)
-        if task_arn:
-            ecs_task_id = task_arn.split("/")[-1]
+        batch_job = find_batch_job_from_execution(
+            execution_arn, args.aws_profile, args.aws_region)
+        if batch_job:
             import threading
             monitor_thread = threading.Thread(
-                target=monitor_ecs_task,
-                args=(task_arn, args.cluster, args.aws_profile, args.aws_region, args.use_gpu),
+                target=monitor_batch_job,
+                args=(batch_job["jobId"], args.aws_profile, args.aws_region),
                 daemon=True,
             )
             monitor_thread.start()
+            info(f"Batch job:     {batch_job['jobId']} ({batch_job.get('compute', 'unknown')})")
         else:
-            info("Could not find ECS task ARN — skipping task monitor")
+            task_arn = find_ecs_task_from_execution(
+                execution_arn, args.cluster, args.aws_profile, args.aws_region)
+            if task_arn:
+                ecs_task_id = task_arn.split("/")[-1]
+                import threading
+                monitor_thread = threading.Thread(
+                    target=monitor_ecs_task,
+                    args=(task_arn, args.cluster, args.aws_profile, args.aws_region, args.use_gpu),
+                    daemon=True,
+                )
+                monitor_thread.start()
+            else:
+                info("Could not find Batch job ID or ECS task ARN — skipping compute monitor")
 
     # ── Step 5: Poll ───────────────────────────────────────────────────────────
     print(f"\n═══ Step 5: Polling (timeout={args.timeout}s) ═══")

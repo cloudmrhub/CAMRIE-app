@@ -1,6 +1,6 @@
 # CAMRIE-app Deployment Guide
 
-Deploy the KomaMRI Fargate/EC2 backend to AWS using GitHub Actions.
+Deploy the KomaMRI AWS Batch backend to AWS using GitHub Actions.
 
 ---
 
@@ -21,26 +21,27 @@ Deploy the KomaMRI Fargate/EC2 backend to AWS using GitHub Actions.
 
 ## Architecture Overview
 
-CAMRIE has **two compute paths** controlled by a single flag (`use_gpu`):
+CAMRIE has **two compute paths** submitted through AWS Batch. The router Lambda
+uses the job size and `use_gpu` hint to choose the cheapest viable queue:
 
 | | CPU path | GPU path |
 |---|---|---|
-| Container runtime | AWS Fargate | EC2-backed ECS (`g4dn.xlarge`) |
+| Batch compute | Fargate Spot | EC2 Spot GPU |
 | Docker image tag | `camrie-fargate:latest` | `camrie-fargate:gpu-latest` |
-| vCPU / RAM | 4 vCPU / 16 GB | 4 vCPU / 14 GB + 1× T4 GPU |
-| Cold-start | ~10 s | 60–90 s (instance) + 5–10 min PTX JIT (first task) |
+| vCPU / RAM | 4 vCPU / 16 GB | 4 vCPU / 15 GB + 1 GPU |
+| Scale-to-zero | Native Fargate | Batch EC2 compute env with `MinvCpus: 0` |
+| Cold-start | image pull + app start | Spot instance launch + image pull |
 | CloudWatch log group | `/ecs/camrie-Prod` | `/ecs/camrie-gpu-Prod` |
-| On-demand price (us-east-1) | ~$0.21/hr | ~$0.526/hr (`g4dn.xlarge`) |
 
-Both paths share the same Step Functions state machine, S3 buckets, and CloudMR Brain API routing via `Lambda RunJobLambda`.
+Both paths share the same Step Functions state machine, S3 buckets, and CloudMR Brain API routing via `RunJobLambda`.
 
 ```
 CloudMR Brain API
     │
     ▼
 Lambda RunJobLambda
-    ├─ use_gpu=false → Fargate (FARGATE capacity provider)
-    └─ use_gpu=true  → EC2 ECS (GpuCapacityProvider, g4dn.xlarge ASG)
+    ├─ small/CPU jobs → AWS Batch CPU queue → Fargate Spot
+    └─ large/GPU jobs → AWS Batch GPU queue → EC2 Spot GPU
 ```
 
 ### Nested stack structure
@@ -48,32 +49,32 @@ Lambda RunJobLambda
 ```
 camrie-app-prod  (root template.yaml)
 └── CalculationApp  (calculation/template.yaml)
-    ├── FargateCluster
-    ├── FargateTaskDefinition
-    ├── GpuTaskDefinition          [condition: GpuImageUri != ""]
-    ├── GpuAutoScalingGroup        [condition: GpuImageUri != ""]
-    ├── GpuCapacityProvider        [condition: GpuImageUri != ""]
-    ├── EC2InstanceRole / Profile  [condition: GpuImageUri != ""]
-    ├── RunJobLambda               (routes to Fargate or GPU)
+    ├── CpuComputeEnvironment      (Batch Fargate Spot)
+    ├── CpuJobQueue / CpuJobDefinition
+    ├── GpuComputeEnvironment      [condition: GpuImageUri != ""]
+    ├── GpuJobQueue / GpuJobDefinition
+    ├── GpuBatchInstanceRole / Profile
+    ├── RunJobLambda               (routes to Batch CPU or GPU)
     └── CalculationStateMachine
 ```
 
-GPU resources are gated by the `GpuEnabled` condition — if `GpuImageUri` is empty the entire GPU stack is skipped.
+GPU Batch resources are gated by the `GpuEnabled` condition. If `GpuImageUri`
+is empty, CPU Batch still deploys and GPU routing falls back to CPU.
 
-### Julia depot / CUDA PTX cache
+### Julia sysimage / CUDA PTX
 
-The GPU task definition uses a host bind-mount with a two-path `JULIA_DEPOT_PATH`:
+Both images bake Julia packages and a KomaMRI sysimage at Docker build time:
 
 ```
-Host /opt/julia-depot-cache  →  container /opt/julia-depot-cache   (read/write, persistent)
-Image /opt/julia-depot        →  container /opt/julia-depot          (read-only, baked in image)
-
-JULIA_DEPOT_PATH=/opt/julia-depot-cache:/opt/julia-depot
+CPU sysimage: /opt/julia-depot/komamri-sysimage.so
+GPU sysimage: /opt/julia-depot/komamri-gpu-sysimage.so
 ```
 
-Julia reads packages from the image's precompiled depot (`/opt/julia-depot`) and writes newly compiled caches (CUDA PTX kernels etc.) to the host-mounted path (`/opt/julia-depot-cache`). PTX kernels persist across tasks on the **same instance**.
-
-**Important**: do NOT mount the host path directly over `/opt/julia-depot`. That shadows the image's precompiled packages, forcing Julia to recompile everything from scratch (~30–60 min of silence on first start).
+The container keeps the production command as `julia`, but the image wraps it so
+every runtime Julia process starts with the sysimage. If the GPU image is built
+on a runner with an NVIDIA GPU, `precompile_workload_gpu.jl` also exercises the
+CUDA simulation path during build; otherwise the GPU packages are still compiled
+into the sysimage and CUDA PTX is generated on first GPU execution.
 
 ---
 
@@ -239,7 +240,8 @@ AWS_PAGER="" aws cloudformation describe-stacks \
 
 Key outputs:
 - `CalculationStateMachineArn`
-- `GpuCapacityProviderName` *(only present when GPU enabled)*
+- `CpuJobQueueArn`
+- `GpuJobQueueArn` *(only present when GPU enabled)*
 
 ### Current image digests in ECR
 
@@ -251,17 +253,25 @@ AWS_PAGER="" aws ecr describe-images \
   --output table
 ```
 
-### GPU ASG status
+### Batch compute status
 
 ```bash
-AWS_PAGER="" aws autoscaling describe-auto-scaling-groups \
+AWS_PAGER="" aws batch describe-compute-environments \
   --region us-east-1 --profile nyu \
-  --query "AutoScalingGroups[?contains(AutoScalingGroupName,'GpuAutoScaling')].[AutoScalingGroupName,MinSize,MaxSize,DesiredCapacity]" \
+  --query "computeEnvironments[?contains(computeEnvironmentName,'camrie')].[computeEnvironmentName,state,status,computeResources.type,computeResources.minvCpus,computeResources.desiredvCpus,computeResources.maxvCpus]" \
   --output table
 ```
 
-> Keep min=0 when idle to avoid paying for a standby `g4dn.xlarge`.
-> ECS Managed Scaling launches instances automatically when a GPU task is submitted.
+GPU EC2 Spot compute should keep `minvCpus` at `0` so idle capacity scales down.
+
+### Batch queue status
+
+```bash
+AWS_PAGER="" aws batch describe-job-queues \
+  --region us-east-1 --profile nyu \
+  --query "jobQueues[?contains(jobQueueName,'camrie')].[jobQueueName,state,status,priority]" \
+  --output table
+```
 
 ### EC2 instances currently running
 

@@ -25,7 +25,7 @@ Usage
   --api-url      Full CloudMR API base URL (default: from stack params)
   --api-user     CloudMR admin e-mail  (for T3 token check)
   --api-pass     CloudMR admin password
-  --timeout      Seconds to wait for Fargate tasks (default: 180)
+  --timeout      Seconds to wait for Batch jobs (default: 180)
 """
 
 import argparse
@@ -198,15 +198,14 @@ def write_synthetic_nifti(path, value=1.0, shape=(10, 10, 5)):
 # ═══════════════════════════════════════════════════════════════════════════════
 def test_t1_precompile(args, image_uri):
     section("T1 · No runtime Julia compilation")
-    MAX_SECONDS = 45.0   # Allow headroom; truly precompiled should be < 45 s
+    MAX_SECONDS = 15.0
     cmd = (
         f'docker run --rm '
-        f'--entrypoint julia '
-        f'-e JULIA_DEPOT_PATH=/root/.julia '
+        f'--entrypoint julia-fast '
         f'{image_uri} '
         f'-e "using KomaMRI; println(\\"KomaMRI loaded\\")"'
     )
-    info(f"docker run … julia -e 'using KomaMRI'")
+    info(f"docker run ... julia-fast -e 'using KomaMRI'")
     t0 = time.time()
     out, rc = run(cmd, timeout=300)
     elapsed = time.time() - t0
@@ -234,8 +233,7 @@ def test_t2_koma_example(args, image_uri):
     )
     cmd = (
         f'docker run --rm '
-        f'--entrypoint julia '
-        f'-e JULIA_DEPOT_PATH=/root/.julia '
+        f'--entrypoint julia-fast '
         f'{image_uri} '
         f'-e "{julia_snippet}"'
     )
@@ -333,8 +331,8 @@ def test_t4_failed_bucket(args, session, statemachine_arn, failed_bucket, task_t
         record("T4", False, f"Could not start execution: {e}", time.time() - start_ts)
         return
 
-    # Poll for Fargate task completion via Step Functions execution status,
-    # then check S3 failed bucket
+    # The Step Functions execution only submits the Batch job; the container
+    # writes failed bundles asynchronously.
     info(f"Waiting up to {task_timeout}s for task to finish …")
     key = wait_for_s3_key(
         s3, failed_bucket, "CAMRIE/test-user/",
@@ -521,7 +519,7 @@ def main():
     p.add_argument("--api-url",     default=None, help="CloudMR API base URL (auto from stack)")
     p.add_argument("--api-user",    default=os.getenv("CLOUDMR_ADMIN_EMAIL"))
     p.add_argument("--api-pass",    default=os.getenv("CLOUDMR_ADMIN_PASSWORD"))
-    p.add_argument("--timeout",     type=int, default=180, help="Fargate task wait timeout (s)")
+    p.add_argument("--timeout",     type=int, default=180, help="Batch job wait timeout (s)")
     args = p.parse_args()
 
     skip = {s.strip().upper() for s in args.skip.split(",") if s.strip()}

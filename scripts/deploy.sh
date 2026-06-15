@@ -12,6 +12,8 @@ STAGE="Prod"
 TAG="latest"
 REPO_NAME="camrie-fargate"
 SKIP_BUILD=0
+GPU_IMAGE_URI=""
+GPU_INSTANCE_TYPES="g4dn.xlarge,g4dn.2xlarge,g5.xlarge"
 
 # Required
 SUBNET1=""
@@ -33,6 +35,10 @@ Optional:
   --tag TAG       Docker image tag (default: latest)
   --skip-build    Skip docker build/push (reuse existing ECR image)
   --profile NAME  AWS CLI profile (default: nyu)
+  --gpu-image-uri URI
+                 Enable GPU AWS Batch path with this ECR image URI
+  --gpu-instance-types LIST
+                 Comma-separated GPU Spot types (default: ${GPU_INSTANCE_TYPES})
 EOF
 }
 
@@ -46,6 +52,8 @@ while [[ $# -gt 0 ]]; do
     --tag)        TAG="$2";         shift 2 ;;
     --skip-build) SKIP_BUILD=1;     shift   ;;
     --profile)    PROFILE="$2";     shift 2 ;;
+    --gpu-image-uri) GPU_IMAGE_URI="$2"; shift 2 ;;
+    --gpu-instance-types) GPU_INSTANCE_TYPES="$2"; shift 2 ;;
     -h|--help)    usage; exit 0 ;;
     *) echo "Unknown option: $1"; usage; exit 1 ;;
   esac
@@ -85,6 +93,8 @@ sam deploy \
       "SubnetId1=${SUBNET1}" \
       "SubnetId2=${SUBNET2}" \
       "SecurityGroupIds=${SG}" \
+      "GpuImageUri=${GPU_IMAGE_URI}" \
+      "GpuInstanceTypes=${GPU_INSTANCE_TYPES}" \
       "StageName=${STAGE}"
 
 echo ""

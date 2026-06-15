@@ -3,8 +3,9 @@ Transform: AWS::Serverless-2016-10-31
 
 Description: >
   CAMRIE Calculation Infrastructure.
-  Fargate task (heavy simulation) driven by a Step Functions state machine.
-  Lambda (lightweight routing) decides whether to go straight to Fargate.
+  Step Functions invokes a lightweight router Lambda, which submits CAMRIE
+  simulation jobs to AWS Batch. CPU jobs run on Fargate Spot; GPU jobs run on
+  EC2 Spot capacity with scale-to-zero.
 
 Parameters:
   StageName:
@@ -26,48 +27,76 @@ Parameters:
 
   FargateImageUri:
     Type: String
-    Description: ECR URI of the pre-built Fargate Docker image.
+    Description: ECR URI of the pre-built CPU Docker image.
 
   ECSClusterName:
     Type: String
     Default: camrie-cluster
-    Description: ECS cluster name (created if it does not exist).
+    Description: Deprecated compatibility parameter. AWS Batch now owns compute.
 
   SubnetId1:
     Type: AWS::EC2::Subnet::Id
-    Description: First public subnet (internet access required for S3/ECR).
+    Description: First public subnet.
 
   SubnetId2:
     Type: AWS::EC2::Subnet::Id
-    Description: Second public subnet (high availability).
+    Description: Second public subnet.
 
   SecurityGroupIds:
     Type: AWS::EC2::SecurityGroup::Id
-    Description: Security group for ECS tasks.
+    Description: Security group for Batch jobs and GPU instances.
 
-  # GPU compute (EC2-backed ECS)
   GpuImageUri:
     Type: String
-    Description: ECR URI for the GPU (CUDA) Docker image. Leave empty to disable GPU path.
+    Description: ECR URI for the GPU (CUDA) Docker image. Leave empty to disable GPU Batch.
     Default: ""
 
   GpuInstanceType:
     Type: String
     Default: g4dn.xlarge
-    Description: EC2 GPU instance type (g4dn.xlarge = 1x T4, g5.xlarge = 1x A10G).
+    Description: Deprecated compatibility parameter. Use GpuInstanceTypes for Batch.
+
+  GpuInstanceTypes:
+    Type: CommaDelimitedList
+    Default: "g4dn.xlarge,g4dn.2xlarge,g5.xlarge"
+    Description: EC2 GPU Spot instance types AWS Batch may launch.
+
+  CpuBatchMaxVcpus:
+    Type: Number
+    Default: 256
+    MinValue: 4
+    Description: Maximum vCPUs for the CPU Fargate Spot compute environment.
+
+  GpuBatchMaxVcpus:
+    Type: Number
+    Default: 32
+    MinValue: 4
+    Description: Maximum vCPUs for the GPU EC2 Spot compute environment.
+
+  BatchJobTimeoutSeconds:
+    Type: Number
+    Default: 3600
+    MinValue: 60
+    Description: Per-attempt timeout for Batch jobs.
+
+  AutoGpuSpinThreshold:
+    Type: Number
+    Default: 5000000
+    MinValue: 1
+    Description: Estimated spin count above which jobs auto-route to GPU when enabled.
+
+  ForcedGpuMinSpinThreshold:
+    Type: Number
+    Default: 1000000
+    MinValue: 1
+    Description: Minimum estimated spins required to honor a user GPU request.
 
 Conditions:
   GpuEnabled: !Not [!Equals [!Ref GpuImageUri, ""]]
 
 Resources:
 
-  # ── ECS Cluster ─────────────────────────────────────────────────────────────
-  ECSCluster:
-    Type: AWS::ECS::Cluster
-    Properties:
-      ClusterName: !Ref ECSClusterName
-
-  # ── IAM Role for Fargate tasks ───────────────────────────────────────────────
+  # -- IAM roles used by Batch jobs ------------------------------------------
   FargateTaskExecutionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -122,46 +151,7 @@ Resources:
                   - !Sub "arn:aws:s3:::${ResultsBucketPName}/*"
                   - !Sub "arn:aws:s3:::${FailedBucketPName}/*"
 
-  # ── Fargate Task Definition ──────────────────────────────────────────────────
-  FargateTaskDefinition:
-    Type: AWS::ECS::TaskDefinition
-    Properties:
-      Family: !Sub "camrie-task-${StageName}"
-      Cpu: "4096"       # 4 vCPU
-      Memory: "16384"   # 16 GB
-      NetworkMode: awsvpc
-      RequiresCompatibilities: [FARGATE]
-      RuntimePlatform:
-        CpuArchitecture: X86_64
-        OperatingSystemFamily: LINUX
-      ExecutionRoleArn: !GetAtt FargateTaskExecutionRole.Arn
-      TaskRoleArn:      !GetAtt FargateTaskRole.Arn
-      ContainerDefinitions:
-        - Name: camrie-worker
-          Image: !Ref FargateImageUri
-          Essential: true
-          Environment:
-            - Name: ResultsBucketName
-              Value: !Ref ResultsBucketPName
-            - Name: FailedBucketName
-              Value: !Ref FailedBucketPName
-            - Name: CAMRIE_THREADS
-              Value: "4"
-          LogConfiguration:
-            LogDriver: awslogs
-            Options:
-              awslogs-group:  !Ref FargateLogGroup
-              awslogs-region: !Ref AWS::Region
-              awslogs-stream-prefix: camrie
-
-  FargateLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: !Sub "/ecs/camrie-${StageName}"
-      RetentionInDays: 30
-
-  # ── EC2 GPU path (only created when GpuImageUri is set) ─────────────────────
-  EC2InstanceRole:
+  GpuBatchInstanceRole:
     Type: AWS::IAM::Role
     Condition: GpuEnabled
     Properties:
@@ -172,129 +162,36 @@ Resources:
             Principal:
               Service: ec2.amazonaws.com
             Action: sts:AssumeRole
-      # Only the two AWS-managed policies needed to register the instance with ECS.
-      # S3 access for simulation data is handled by FargateTaskRole on the container.
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role
         - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
 
-  EC2InstanceProfile:
+  GpuBatchInstanceProfile:
     Type: AWS::IAM::InstanceProfile
     Condition: GpuEnabled
     Properties:
-      Roles: [!Ref EC2InstanceRole]
+      Roles: [!Ref GpuBatchInstanceRole]
 
-  GpuLaunchTemplate:
-    Type: AWS::EC2::LaunchTemplate
+  GpuSpotFleetRole:
+    Type: AWS::IAM::Role
     Condition: GpuEnabled
     Properties:
-      LaunchTemplateData:
-        # ECS-optimised GPU AMI (Amazon Linux 2, latest)
-        ImageId: !Sub "{{resolve:ssm:/aws/service/ecs/optimized-ami/amazon-linux-2/gpu/recommended/image_id}}"
-        InstanceType: !Ref GpuInstanceType
-        IamInstanceProfile:
-          Arn: !GetAtt EC2InstanceProfile.Arn
-        SecurityGroupIds: [!Ref SecurityGroupIds]
-        UserData:
-          Fn::Base64: !Sub |
-            #!/bin/bash
-            echo ECS_CLUSTER=${ECSClusterName}      >> /etc/ecs/ecs.config
-            echo ECS_ENABLE_GPU_SUPPORT=true         >> /etc/ecs/ecs.config
-            echo ECS_ENABLE_AWSLOGS_EXECUTIONROLE_OVERRIDE=true >> /etc/ecs/ecs.config
-        BlockDeviceMappings:
-          - DeviceName: /dev/xvda
-            Ebs:
-              VolumeSize: 100
-              VolumeType: gp3
-              DeleteOnTermination: true
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: spotfleet.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2SpotFleetTaggingRole
 
-  GpuAutoScalingGroup:
-    Type: AWS::AutoScaling::AutoScalingGroup
-    Condition: GpuEnabled
+  # -- CloudWatch logs --------------------------------------------------------
+  FargateLogGroup:
+    Type: AWS::Logs::LogGroup
     Properties:
-      MinSize: "0"
-      MaxSize: "2"
-      DesiredCapacity: "0"
-      VPCZoneIdentifier: [!Ref SubnetId1, !Ref SubnetId2]
-      LaunchTemplate:
-        LaunchTemplateId: !Ref GpuLaunchTemplate
-        Version: !GetAtt GpuLaunchTemplate.LatestVersionNumber
-      Tags:
-        - Key: Name
-          Value: !Sub "camrie-gpu-${StageName}"
-          PropagateAtLaunch: true
-
-  GpuCapacityProvider:
-    Type: AWS::ECS::CapacityProvider
-    Condition: GpuEnabled
-    Properties:
-      AutoScalingGroupProvider:
-        AutoScalingGroupArn: !Ref GpuAutoScalingGroup
-        ManagedScaling:
-          Status: ENABLED
-          TargetCapacity: 100
-          MinimumScalingStepSize: 1
-          MaximumScalingStepSize: 1
-        ManagedTerminationProtection: DISABLED
-
-  ClusterCapacityProviderAssociation:
-    Type: AWS::ECS::ClusterCapacityProviderAssociations
-    Condition: GpuEnabled
-    Properties:
-      Cluster: !Ref ECSCluster
-      CapacityProviders:
-        - !Ref GpuCapacityProvider
-      DefaultCapacityProviderStrategy: []
-
-  GpuTaskDefinition:
-    Type: AWS::ECS::TaskDefinition
-    Condition: GpuEnabled
-    DependsOn: GpuLogGroup
-    Properties:
-      Family: !Sub "camrie-gpu-task-${StageName}"
-      Cpu: "4096"        # 4 vCPU  (task level, consistent with Fargate task)
-      Memory: "14000"   # 14 GB   (task level)
-      NetworkMode: awsvpc
-      RequiresCompatibilities: [EC2]
-      ExecutionRoleArn: !GetAtt FargateTaskExecutionRole.Arn
-      TaskRoleArn:      !GetAtt FargateTaskRole.Arn
-      ContainerDefinitions:
-        - Name: camrie-worker
-          Image: !Ref GpuImageUri
-          Essential: true
-          ResourceRequirements:
-            - Type: GPU
-              Value: "1"
-          MemoryReservation: 12000  # soft limit; hard cap is task-level Memory
-          MountPoints:
-            - SourceVolume: julia-depot-cache
-              ContainerPath: /opt/julia-depot-cache
-              ReadOnly: false
-          Environment:
-            - Name: JULIA_DEPOT_PATH
-              Value: "/opt/julia-depot-cache:/opt/julia-depot"
-            - Name: ResultsBucketName
-              Value: !Ref ResultsBucketPName
-            - Name: FailedBucketName
-              Value: !Ref FailedBucketPName
-            - Name: CAMRIE_THREADS
-              Value: "4"
-          LogConfiguration:
-            LogDriver: awslogs
-            Options:
-              awslogs-group:  !Ref GpuLogGroup
-              awslogs-region: !Ref AWS::Region
-              awslogs-stream-prefix: camrie-gpu
-      # Host bind-mount: persists Julia/CUDA compiled kernels across tasks
-      # on the same EC2 instance.
-      # IMPORTANT: mount to /opt/julia-depot-cache (not /opt/julia-depot) so the
-      # image's precompiled package depot is not shadowed. JULIA_DEPOT_PATH is set
-      # to /opt/julia-depot-cache:/opt/julia-depot so Julia reads from the image
-      # depot and writes new caches (CUDA PTX etc.) to the persistent host path.
-      Volumes:
-        - Name: julia-depot-cache
-          Host:
-            SourcePath: /opt/julia-depot-cache
+      LogGroupName: !Sub "/ecs/camrie-${StageName}"
+      RetentionInDays: 30
 
   GpuLogGroup:
     Type: AWS::Logs::LogGroup
@@ -303,11 +200,189 @@ Resources:
       LogGroupName: !Sub "/ecs/camrie-gpu-${StageName}"
       RetentionInDays: 30
 
-  # ── RunJobLambda (routes job → Fargate) ─────────────────────────────────────
+  # -- AWS Batch CPU path: Fargate Spot --------------------------------------
+  CpuComputeEnvironment:
+    Type: AWS::Batch::ComputeEnvironment
+    Properties:
+      ComputeEnvironmentName: !Sub "${AWS::StackName}-cpu-${StageName}"
+      Type: MANAGED
+      State: ENABLED
+      ComputeResources:
+        Type: FARGATE_SPOT
+        MaxvCpus: !Ref CpuBatchMaxVcpus
+        Subnets: [!Ref SubnetId1, !Ref SubnetId2]
+        SecurityGroupIds: [!Ref SecurityGroupIds]
+      Tags:
+        App: CAMRIE
+        Stage: !Ref StageName
+        Compute: cpu-fargate-spot
+
+  CpuJobQueue:
+    Type: AWS::Batch::JobQueue
+    Properties:
+      JobQueueName: !Sub "${AWS::StackName}-cpu-${StageName}"
+      Priority: 10
+      State: ENABLED
+      ComputeEnvironmentOrder:
+        - Order: 1
+          ComputeEnvironment: !Ref CpuComputeEnvironment
+
+  CpuJobDefinition:
+    Type: AWS::Batch::JobDefinition
+    Properties:
+      JobDefinitionName: !Sub "${AWS::StackName}-cpu-${StageName}"
+      Type: container
+      PlatformCapabilities: [FARGATE]
+      ContainerProperties:
+        Image: !Ref FargateImageUri
+        ExecutionRoleArn: !GetAtt FargateTaskExecutionRole.Arn
+        JobRoleArn: !GetAtt FargateTaskRole.Arn
+        FargatePlatformConfiguration:
+          PlatformVersion: LATEST
+        NetworkConfiguration:
+          AssignPublicIp: ENABLED
+        ResourceRequirements:
+          - Type: VCPU
+            Value: "4"
+          - Type: MEMORY
+            Value: "16384"
+        Environment:
+          - Name: ResultsBucketName
+            Value: !Ref ResultsBucketPName
+          - Name: FailedBucketName
+            Value: !Ref FailedBucketPName
+          - Name: CAMRIE_THREADS
+            Value: "4"
+        LogConfiguration:
+          LogDriver: awslogs
+          Options:
+            awslogs-group: !Ref FargateLogGroup
+            awslogs-region: !Ref AWS::Region
+            awslogs-stream-prefix: camrie-batch
+      RetryStrategy:
+        Attempts: 3
+      Timeout:
+        AttemptDurationSeconds: !Ref BatchJobTimeoutSeconds
+      PropagateTags: true
+      Tags:
+        App: CAMRIE
+        Stage: !Ref StageName
+        Compute: cpu-fargate-spot
+
+  # -- AWS Batch GPU path: EC2 Spot ------------------------------------------
+  GpuLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Condition: GpuEnabled
+    Properties:
+      LaunchTemplateData:
+        BlockDeviceMappings:
+          - DeviceName: /dev/xvda
+            Ebs:
+              VolumeSize: 100
+              VolumeType: gp3
+              DeleteOnTermination: true
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Name
+                Value: !Sub "camrie-batch-gpu-${StageName}"
+              - Key: App
+                Value: CAMRIE
+              - Key: Stage
+                Value: !Ref StageName
+              - Key: AutoTerminate
+                Value: "true"
+
+  GpuComputeEnvironment:
+    Type: AWS::Batch::ComputeEnvironment
+    Condition: GpuEnabled
+    Properties:
+      ComputeEnvironmentName: !Sub "${AWS::StackName}-gpu-${StageName}"
+      Type: MANAGED
+      State: ENABLED
+      ReplaceComputeEnvironment: false
+      ComputeResources:
+        Type: SPOT
+        AllocationStrategy: SPOT_PRICE_CAPACITY_OPTIMIZED
+        MinvCpus: 0
+        MaxvCpus: !Ref GpuBatchMaxVcpus
+        InstanceTypes: !Ref GpuInstanceTypes
+        InstanceRole: !GetAtt GpuBatchInstanceProfile.Arn
+        SpotIamFleetRole: !GetAtt GpuSpotFleetRole.Arn
+        Subnets: [!Ref SubnetId1, !Ref SubnetId2]
+        SecurityGroupIds: [!Ref SecurityGroupIds]
+        Ec2Configuration:
+          - ImageType: ECS_AL2023_NVIDIA
+        LaunchTemplate:
+          LaunchTemplateId: !Ref GpuLaunchTemplate
+          Version: $Latest
+        Tags:
+          Name: !Sub "camrie-batch-gpu-${StageName}"
+          App: CAMRIE
+          Stage: !Ref StageName
+          AutoTerminate: "true"
+      Tags:
+        App: CAMRIE
+        Stage: !Ref StageName
+        Compute: gpu-ec2-spot
+
+  GpuJobQueue:
+    Type: AWS::Batch::JobQueue
+    Condition: GpuEnabled
+    Properties:
+      JobQueueName: !Sub "${AWS::StackName}-gpu-${StageName}"
+      Priority: 20
+      State: ENABLED
+      ComputeEnvironmentOrder:
+        - Order: 1
+          ComputeEnvironment: !Ref GpuComputeEnvironment
+
+  GpuJobDefinition:
+    Type: AWS::Batch::JobDefinition
+    Condition: GpuEnabled
+    Properties:
+      JobDefinitionName: !Sub "${AWS::StackName}-gpu-${StageName}"
+      Type: container
+      PlatformCapabilities: [EC2]
+      ContainerProperties:
+        Image: !Ref GpuImageUri
+        ExecutionRoleArn: !GetAtt FargateTaskExecutionRole.Arn
+        JobRoleArn: !GetAtt FargateTaskRole.Arn
+        ResourceRequirements:
+          - Type: VCPU
+            Value: "4"
+          - Type: MEMORY
+            Value: "15000"
+          - Type: GPU
+            Value: "1"
+        Environment:
+          - Name: ResultsBucketName
+            Value: !Ref ResultsBucketPName
+          - Name: FailedBucketName
+            Value: !Ref FailedBucketPName
+          - Name: CAMRIE_THREADS
+            Value: "4"
+        LogConfiguration:
+          LogDriver: awslogs
+          Options:
+            awslogs-group: !Ref GpuLogGroup
+            awslogs-region: !Ref AWS::Region
+            awslogs-stream-prefix: camrie-gpu-batch
+      RetryStrategy:
+        Attempts: 2
+      Timeout:
+        AttemptDurationSeconds: !Ref BatchJobTimeoutSeconds
+      PropagateTags: true
+      Tags:
+        App: CAMRIE
+        Stage: !Ref StageName
+        Compute: gpu-ec2-spot
+
+  # -- RunJobLambda: routes job to Batch --------------------------------------
   RunJobLambda:
     Type: AWS::Serverless::Function
     Properties:
-      Description: Launches a Fargate task to run a CAMRIE simulation job.
+      Description: Submits a CAMRIE simulation job to AWS Batch.
       Runtime: python3.11
       Handler: index.lambda_handler
       Timeout: 60
@@ -315,95 +390,171 @@ Resources:
       Policies:
         - Statement:
             - Effect: Allow
-              Action: [ecs:RunTask, iam:PassRole]
+              Action: [batch:SubmitJob]
               Resource: "*"
+            - Effect: Allow
+              Action: [iam:PassRole]
+              Resource:
+                - !GetAtt FargateTaskExecutionRole.Arn
+                - !GetAtt FargateTaskRole.Arn
             - Effect: Allow
               Action: [s3:PutObject]
               Resource: !Sub "arn:aws:s3:::${DataBucketPName}/_camrie_events/*"
+            - Effect: Allow
+              Action: [s3:GetObject]
+              Resource: !Sub "arn:aws:s3:::${DataBucketPName}/*"
       Environment:
         Variables:
-          CLUSTER_ARN:          !GetAtt ECSCluster.Arn
-          TASK_DEF_ARN:         !Ref FargateTaskDefinition
-          GPU_TASK_DEF_ARN:     !If [GpuEnabled, !Ref GpuTaskDefinition, ""]
-          GPU_CAPACITY_PROVIDER: !If [GpuEnabled, !Ref GpuCapacityProvider, ""]
-          SUBNET_1:             !Ref SubnetId1
-          SUBNET_2:             !Ref SubnetId2
-          SECURITY_GROUP:       !Ref SecurityGroupIds
-          DATA_BUCKET:          !Ref DataBucketPName
+          CPU_JOB_QUEUE: !Ref CpuJobQueue
+          CPU_JOB_DEFINITION: !Ref CpuJobDefinition
+          GPU_JOB_QUEUE: !If [GpuEnabled, !Ref GpuJobQueue, ""]
+          GPU_JOB_DEFINITION: !If [GpuEnabled, !Ref GpuJobDefinition, ""]
+          DATA_BUCKET: !Ref DataBucketPName
+          AUTO_GPU_SPIN_THRESHOLD: !Ref AutoGpuSpinThreshold
+          FORCED_GPU_MIN_SPIN_THRESHOLD: !Ref ForcedGpuMinSpinThreshold
       InlineCode: |
-        import json, os, uuid, boto3
+        import json, os, re, struct, uuid
+
+        import boto3
+
+        batch = boto3.client("batch")
+        s3 = boto3.client("s3")
+
+        DEFAULT_VOXELS_PER_SLICE = 256 * 256
+
+        def truthy(value):
+            return str(value).lower() in ("true", "1", "yes", "y")
+
+        def as_int(value, default):
+            try:
+                return int(value)
+            except Exception:
+                return default
+
+        def clean_job_name(event):
+            raw = event.get("pipeline") or event.get("pipeline_id") or str(uuid.uuid4())
+            name = re.sub(r"[^A-Za-z0-9_-]", "-", str(raw))[:100].strip("-_")
+            return f"camrie-{name or uuid.uuid4().hex[:16]}"
+
+        def read_nifti_voxels_per_slice(file_spec):
+            if not isinstance(file_spec, dict):
+                return DEFAULT_VOXELS_PER_SLICE
+
+            bucket = file_spec.get("bucket") or os.environ.get("DATA_BUCKET")
+            key = file_spec.get("key")
+            if not bucket or not key:
+                return DEFAULT_VOXELS_PER_SLICE
+
+            try:
+                obj = s3.get_object(Bucket=bucket, Key=key, Range="bytes=0-351")
+                header = obj["Body"].read()
+                if len(header) < 48:
+                    return DEFAULT_VOXELS_PER_SLICE
+
+                sizeof_le = struct.unpack("<i", header[0:4])[0]
+                sizeof_be = struct.unpack(">i", header[0:4])[0]
+                endian = "<" if sizeof_le == 348 else ">" if sizeof_be == 348 else "<"
+                dim_count = max(0, min(7, struct.unpack(endian + "h", header[40:42])[0]))
+                dims = []
+                for idx in range(dim_count):
+                    value = struct.unpack(endian + "h", header[42 + (idx * 2):44 + (idx * 2)])[0]
+                    dims.append(max(1, int(value)))
+
+                if len(dims) >= 2:
+                    return max(1, dims[0] * dims[1])
+                if dims:
+                    return max(1, dims[0])
+            except Exception as exc:
+                print(f"Could not read NIfTI header for routing: {exc}")
+
+            return DEFAULT_VOXELS_PER_SLICE
+
+        def estimate_spins(event):
+            task = event.get("task", event) if isinstance(event, dict) else {}
+            opts = task.get("options", {}) if isinstance(task, dict) else {}
+            sim = opts.get("simulation", {}) if isinstance(opts, dict) else {}
+            geo = opts.get("geometry", {}) if isinstance(opts, dict) else {}
+
+            n_slices = max(1, as_int(geo.get("num_slices", sim.get("num_slices", 1)), 1))
+            spin_factor = max(1, as_int(sim.get("spin_factor", 1), 1))
+            spins_per_voxel = max(0, as_int(sim.get("spins_per_voxel", 0), 0))
+            voxels_per_slice = read_nifti_voxels_per_slice(opts.get("rho"))
+            return n_slices * voxels_per_slice * (spin_factor ** 3) * (1 + spins_per_voxel)
+
+        def event_payload_value(event):
+            data_bucket = os.environ.get("DATA_BUCKET", "")
+            event_json = json.dumps(event)
+            if len(event_json) <= 7000 or not data_bucket:
+                return event_json
+
+            event_key = f"_camrie_events/{uuid.uuid4()}.json"
+            s3.put_object(Bucket=data_bucket, Key=event_key, Body=event_json.encode())
+            print(f"Stored event at s3://{data_bucket}/{event_key}")
+            return json.dumps({"s3_event_bucket": data_bucket, "s3_event_key": event_key})
+
+        def choose_compute(event, estimated_spins):
+            task = event.get("task", event) if isinstance(event, dict) else {}
+            opts = task.get("options", {}) if isinstance(task, dict) else {}
+            sim = opts.get("simulation", {}) if isinstance(opts, dict) else {}
+            use_gpu = truthy(sim.get("use_gpu", False))
+
+            gpu_queue = os.environ.get("GPU_JOB_QUEUE", "")
+            gpu_definition = os.environ.get("GPU_JOB_DEFINITION", "")
+            gpu_available = bool(gpu_queue and gpu_definition)
+            auto_threshold = as_int(os.environ.get("AUTO_GPU_SPIN_THRESHOLD"), 5000000)
+            forced_threshold = as_int(os.environ.get("FORCED_GPU_MIN_SPIN_THRESHOLD"), 1000000)
+
+            if gpu_available and estimated_spins > auto_threshold:
+                return "gpu", gpu_queue, gpu_definition, "auto-threshold"
+            if gpu_available and use_gpu and estimated_spins >= forced_threshold:
+                return "gpu", gpu_queue, gpu_definition, "user-request"
+            if use_gpu and not gpu_available:
+                print("GPU requested but GPU Batch is not configured; routing to CPU.")
+            elif use_gpu:
+                print("GPU requested for a small job; routing to CPU to avoid GPU Spot startup cost.")
+
+            return (
+                "cpu",
+                os.environ["CPU_JOB_QUEUE"],
+                os.environ["CPU_JOB_DEFINITION"],
+                "cpu-default",
+            )
 
         def lambda_handler(event, context):
-            ecs = boto3.client("ecs")
-            s3  = boto3.client("s3")
+            estimated_spins = estimate_spins(event)
+            compute, queue, definition, reason = choose_compute(event, estimated_spins)
+            payload = event_payload_value(event)
+            job_name = clean_job_name(event)
 
-            # Detect GPU request — brain API wraps payload under event["task"]
-            task    = event.get("task", event) if isinstance(event, dict) else {}
-            opts    = task.get("options", {}) if isinstance(task, dict) else {}
-            sim     = opts.get("simulation", {}) if isinstance(opts, dict) else {}
-            use_gpu = str(sim.get("use_gpu", False)).lower() in ("true", "1", "yes")
-
-            # Write large event JSON to S3 to avoid 8192-char ECS override limit
-            data_bucket = os.environ.get("DATA_BUCKET", "")
-            event_json  = json.dumps(event)
-            if len(event_json) > 7000 and data_bucket:
-                event_key        = f"_camrie_events/{uuid.uuid4()}.json"
-                s3.put_object(Bucket=data_bucket, Key=event_key, Body=event_json.encode())
-                file_event_value = json.dumps({"s3_event_bucket": data_bucket, "s3_event_key": event_key})
-                print(f"Stored event at s3://{data_bucket}/{event_key}")
-            else:
-                file_event_value = event_json
-
-            overrides = {
-                "containerOverrides": [{
-                    "name": "camrie-worker",
-                    "environment": [{"name": "FILE_EVENT", "value": file_event_value}],
-                }]
+            print(
+                f"Submitting {job_name} to Batch {compute} queue "
+                f"(estimated_spins={estimated_spins}, reason={reason})"
+            )
+            response = batch.submit_job(
+                jobName=job_name,
+                jobQueue=queue,
+                jobDefinition=definition,
+                containerOverrides={
+                    "environment": [{"name": "FILE_EVENT", "value": payload}],
+                },
+                tags={
+                    "App": "CAMRIE",
+                    "Compute": compute,
+                    "RoutingReason": reason,
+                },
+            )
+            return {
+                "jobId": response["jobId"],
+                "jobName": job_name,
+                "jobQueue": queue,
+                "jobDefinition": definition,
+                "compute": compute,
+                "routingReason": reason,
+                "estimatedSpins": estimated_spins,
+                "statusCode": 202,
             }
 
-            gpu_task_def  = os.environ.get("GPU_TASK_DEF_ARN", "")
-            gpu_cap_prov  = os.environ.get("GPU_CAPACITY_PROVIDER", "")
-
-            if use_gpu and gpu_task_def and gpu_cap_prov:
-                print("GPU requested — routing to EC2/GPU task")
-                network_cfg = {
-                    "awsvpcConfiguration": {
-                        "subnets":        [os.environ["SUBNET_1"], os.environ["SUBNET_2"]],
-                        "securityGroups": [os.environ["SECURITY_GROUP"]],
-                        # EC2 launch type does NOT support assignPublicIp
-                    }
-                }
-                response = ecs.run_task(
-                    cluster=os.environ["CLUSTER_ARN"],
-                    taskDefinition=gpu_task_def,
-                    capacityProviderStrategy=[{"capacityProvider": gpu_cap_prov, "weight": 1}],
-                    networkConfiguration=network_cfg,
-                    overrides=overrides,
-                )
-            else:
-                if use_gpu:
-                    print("GPU requested but GPU path not configured — falling back to CPU/Fargate")
-                network_cfg = {
-                    "awsvpcConfiguration": {
-                        "subnets":        [os.environ["SUBNET_1"], os.environ["SUBNET_2"]],
-                        "securityGroups": [os.environ["SECURITY_GROUP"]],
-                        "assignPublicIp": "ENABLED",
-                    }
-                }
-                response = ecs.run_task(
-                    cluster=os.environ["CLUSTER_ARN"],
-                    taskDefinition=os.environ["TASK_DEF_ARN"],
-                    launchType="FARGATE",
-                    networkConfiguration=network_cfg,
-                    overrides=overrides,
-                )
-
-            tasks = response.get("tasks", [])
-            if not tasks:
-                raise RuntimeError(f"ECS RunTask failed: {response.get('failures')}")
-            return {"taskArn": tasks[0]["taskArn"], "statusCode": 202}
-
-  # ── IAM Role for Step Functions ──────────────────────────────────────────────
+  # -- IAM role for Step Functions -------------------------------------------
   StateMachineRole:
     Type: AWS::IAM::Role
     Properties:
@@ -423,7 +574,7 @@ Resources:
                 Action: lambda:InvokeFunction
                 Resource: !GetAtt RunJobLambda.Arn
 
-  # ── Step Functions state machine ─────────────────────────────────────────────
+  # -- Step Functions state machine ------------------------------------------
   CalculationStateMachine:
     Type: AWS::Serverless::StateMachine
     Properties:
@@ -457,22 +608,41 @@ Outputs:
     Export:
       Name: !Sub "${AWS::StackName}-RunJobLambdaArn"
 
-  ECSClusterArn:
-    Description: ARN of the ECS cluster
-    Value: !GetAtt ECSCluster.Arn
+  CpuJobQueueArn:
+    Description: ARN of the CPU AWS Batch job queue.
+    Value: !Ref CpuJobQueue
     Export:
-      Name: !Sub "${AWS::StackName}-ECSClusterArn"
+      Name: !Sub "${AWS::StackName}-CpuJobQueueArn"
 
-  GpuCapacityProviderName:
-    Condition: GpuEnabled
-    Description: Name of the GPU ECS capacity provider
-    Value: !Ref GpuCapacityProvider
+  CpuJobDefinitionArn:
+    Description: ARN of the CPU AWS Batch job definition revision.
+    Value: !Ref CpuJobDefinition
     Export:
-      Name: !Sub "${AWS::StackName}-GpuCapacityProvider"
+      Name: !Sub "${AWS::StackName}-CpuJobDefinitionArn"
+
+  CpuLogGroupName:
+    Description: CloudWatch log group for CPU Batch jobs.
+    Value: !Ref FargateLogGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-CpuLogGroup"
+
+  GpuJobQueueArn:
+    Condition: GpuEnabled
+    Description: ARN of the GPU AWS Batch job queue.
+    Value: !Ref GpuJobQueue
+    Export:
+      Name: !Sub "${AWS::StackName}-GpuJobQueueArn"
+
+  GpuJobDefinitionArn:
+    Condition: GpuEnabled
+    Description: ARN of the GPU AWS Batch job definition revision.
+    Value: !Ref GpuJobDefinition
+    Export:
+      Name: !Sub "${AWS::StackName}-GpuJobDefinitionArn"
 
   GpuLogGroupName:
     Condition: GpuEnabled
-    Description: CloudWatch log group for GPU tasks
+    Description: CloudWatch log group for GPU Batch jobs.
     Value: !Ref GpuLogGroup
     Export:
       Name: !Sub "${AWS::StackName}-GpuLogGroup"

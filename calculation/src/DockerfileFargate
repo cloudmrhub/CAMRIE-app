@@ -1,58 +1,80 @@
 # ==============================================================================
-#  CAMRIE Fargate image
-#  Python 3.11 + Julia 1.11 + KomaMRI precompiled
+#  CAMRIE CPU image
+#  Python 3.11 + Julia 1.11 + KomaMRI sysimage
+#  Used by AWS Batch on Fargate Spot.
+# ==============================================================================
+FROM python:3.11-slim AS julia-builder
+
+WORKDIR /build
+
+# -- OS deps needed while compiling the Julia sysimage -------------------------
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+        build-essential git ca-certificates wget curl libgomp1 \
+ && rm -rf /var/lib/apt/lists/*
+
+# -- Julia 1.11 ---------------------------------------------------------------
+ARG JULIA_VERSION=1.11.4
+RUN mkdir -p /opt/julia \
+ && wget -q https://julialang-s3.julialang.org/bin/linux/x64/1.11/julia-${JULIA_VERSION}-linux-x86_64.tar.gz \
+ && tar -xzf julia-${JULIA_VERSION}-linux-x86_64.tar.gz -C /opt/julia --strip-components=1 \
+ && rm julia-${JULIA_VERSION}-linux-x86_64.tar.gz \
+ && ln -s /opt/julia/bin/julia /usr/local/bin/julia
+
+ENV JULIA_DEPOT_PATH=/opt/julia-depot
+ENV JULIA_CPU_TARGET=generic
+ENV JULIA_NUM_PRECOMPILE_TASKS=8
+ENV JULIA_PKG_DISABLE_PKGIMAGES=true
+
+# -- Julia packages and sysimage ---------------------------------------------
+COPY install_julia_deps.jl /tmp/install_julia_deps.jl
+RUN julia /tmp/install_julia_deps.jl
+
+RUN julia -e 'import Pkg; Pkg.add("PackageCompiler"); Pkg.precompile()'
+COPY precompile_workload.jl /tmp/precompile_workload.jl
+RUN julia -e 'using PackageCompiler; create_sysimage([:KomaMRI, :NPZ, :JSON, :HDF5, :LinearAlgebra]; sysimage_path="/opt/julia-depot/komamri-sysimage.so", precompile_execution_file="/tmp/precompile_workload.jl")'
+
+# ==============================================================================
+#  Final runtime image
 # ==============================================================================
 FROM python:3.11-slim
 
 WORKDIR /app
 
-# ── OS deps ──────────────────────────────────────────────────────────────────
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-        git ca-certificates wget curl libgomp1 \
+        git ca-certificates curl libgomp1 \
  && rm -rf /var/lib/apt/lists/*
 
-# ── Julia 1.11 ────────────────────────────────────────────────────────────────
-ARG JULIA_VERSION=1.11.4
-RUN wget -q https://julialang-s3.julialang.org/bin/linux/x64/1.11/julia-${JULIA_VERSION}-linux-x86_64.tar.gz \
- && tar -xzf julia-${JULIA_VERSION}-linux-x86_64.tar.gz -C /usr/local --strip-components=1 \
- && rm julia-${JULIA_VERSION}-linux-x86_64.tar.gz
+COPY --from=julia-builder /opt/julia /opt/julia
+COPY --from=julia-builder /opt/julia-depot /opt/julia-depot
 
-# ── Julia environment ────────────────────────────────────────────────────────
-# Fixed depot path (not ~/.julia) so it's reliable across container restarts.
 ENV JULIA_DEPOT_PATH=/opt/julia-depot
-
-# Multi-target CPU codegen: the build host (GitHub Actions) likely differs from
-# Fargate hardware.  Without this Julia precompiles only for the build CPU and
-# the cache is invalidated at runtime on a different µarch → full recompile.
-ENV JULIA_CPU_TARGET="generic"
-
-# Disable native shared-library package images (.so) to avoid linker issues in
-# Docker slim images.  Classic .ji precompile caches are portable and load in
-# ~20-30 s — well within Fargate startup limits.
+ENV JULIA_CPU_TARGET=generic
 ENV JULIA_PKG_DISABLE_PKGIMAGES=true
+ENV CAMRIE_JULIA_SYSIMAGE=/opt/julia-depot/komamri-sysimage.so
+ENV PATH=/usr/local/bin:/opt/julia/bin:$PATH
 
-# ── Pre-install Julia packages (cached layer) ────────────────────────────────
-COPY install_julia_deps.jl /tmp/install_julia_deps.jl
-RUN julia /tmp/install_julia_deps.jl
+# Production code invokes "julia" directly. Keep that interface and inject the
+# sysimage here so every runtime Julia process benefits automatically.
+RUN printf '%s\n' \
+      '#!/bin/sh' \
+      'exec /opt/julia/bin/julia --sysimage=/opt/julia-depot/komamri-sysimage.so "$@"' \
+      > /usr/local/bin/julia \
+ && chmod +x /usr/local/bin/julia \
+ && ln -s /usr/local/bin/julia /usr/local/bin/julia-fast
 
-# ── Python deps ───────────────────────────────────────────────────────────────
 COPY requirements.txt .
 RUN pip install --upgrade pip \
  && pip install -r requirements.txt
 
-# ── App code ──────────────────────────────────────────────────────────────────
 COPY . .
 
-# Verify precompile cache survives COPY (catches stale-cache issues at build
-# time rather than at runtime).
-RUN julia -e 'using KomaMRI, NPZ, JSON, HDF5; println("Post-COPY precompile OK")'
+RUN julia -e 'using KomaMRI, NPZ, JSON, HDF5; println("CPU sysimage OK")'
 
-# matplotlib & fontconfig scratch dirs (writable in Fargate /tmp)
 RUN mkdir -p /tmp/.matplotlib /tmp/.fontconfig && chmod 777 /tmp/.matplotlib /tmp/.fontconfig
 ENV MPLCONFIGDIR=/tmp/.matplotlib
 ENV FONTCONFIG_PATH=/tmp/.fontconfig
 ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 
-# Fargate entrypoint — reads FILE_EVENT env var
 ENTRYPOINT ["python", "app.py"]

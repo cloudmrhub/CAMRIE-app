@@ -17,12 +17,12 @@ Parameters:
 
   FargateImageUri:
     Type: String
-    Description: ECR URI of the pre-built Fargate Docker image
+    Description: ECR URI of the pre-built CPU Docker image
 
   ECSClusterName:
     Type: String
     Default: camrie-cluster
-    Description: ECS cluster name
+    Description: Deprecated compatibility parameter. AWS Batch now owns compute.
 
   SubnetId1:
     Type: AWS::EC2::Subnet::Id
@@ -34,7 +34,7 @@ Parameters:
 
   SecurityGroupIds:
     Type: AWS::EC2::SecurityGroup::Id
-    Description: Security group for ECS tasks
+    Description: Security group for Batch jobs and GPU instances
 
   StageName:
     Type: String
@@ -49,7 +49,15 @@ Parameters:
   GpuInstanceType:
     Type: String
     Default: g4dn.xlarge
-    Description: EC2 GPU instance type.
+    Description: Deprecated compatibility parameter. Use GpuInstanceTypes for AWS Batch.
+
+  GpuInstanceTypes:
+    Type: CommaDelimitedList
+    Default: "g4dn.xlarge,g4dn.2xlarge,g5.xlarge"
+    Description: EC2 GPU Spot instance types AWS Batch may launch.
+
+Conditions:
+  GpuEnabled: !Not [!Equals [!Ref GpuImageUri, ""]]
 
 Globals:
   Function:
@@ -84,6 +92,7 @@ Resources:
         SecurityGroupIds:   !Ref SecurityGroupIds
         GpuImageUri:        !Ref GpuImageUri
         GpuInstanceType:    !Ref GpuInstanceType
+        GpuInstanceTypes:   !Join [",", !Ref GpuInstanceTypes]
 
 Outputs:
   CalculationStateMachineArn:
@@ -95,3 +104,12 @@ Outputs:
   RunJobLambdaArn:
     Description: ARN of the RunJob Lambda
     Value: !GetAtt CalculationApp.Outputs.RunJobLambdaArn
+
+  CpuJobQueueArn:
+    Description: ARN of the CPU AWS Batch job queue
+    Value: !GetAtt CalculationApp.Outputs.CpuJobQueueArn
+
+  GpuJobQueueArn:
+    Condition: GpuEnabled
+    Description: ARN of the GPU AWS Batch job queue
+    Value: !GetAtt CalculationApp.Outputs.GpuJobQueueArn
