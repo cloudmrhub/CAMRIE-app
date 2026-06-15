@@ -85,6 +85,7 @@ fi
 echo "==> Attaching managed policies…"
 for POLICY in \
   "arn:aws:iam::aws:policy/AmazonECS_FullAccess" \
+  "arn:aws:iam::aws:policy/AmazonEC2FullAccess" \
   "arn:aws:iam::aws:policy/AWSBatchFullAccess" \
   "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryFullAccess" \
   "arn:aws:iam::aws:policy/AWSCloudFormationFullAccess" \
