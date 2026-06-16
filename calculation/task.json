@@ -1,0 +1,201 @@
+{
+    "version": "v1",
+    "alias": "Protocol 1",
+    "output": {
+        "matlab": true,
+        "SNR": false,
+        "RSSreconstruction": true
+    },
+    "task": {
+        "name": "camrieJob",
+        "version": "v1",
+        "acquisition": 2,
+        "type": "simulation",
+        "application": "CAMRIE",
+        "alias": "Protocol1Test",
+        "pipeline": "b6078683-8d7f-3b5c-aeb1-cd9698ad571d",
+        "options": {
+            "sequences": [
+                {
+                    "file": {
+                        "type": "file",
+                        "id": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+                        "options": {
+                            "type": "s3",
+                            "filename": "IXIguy_T1_SE.seq",
+                            "options": {},
+                            "bucket": "cloudmr-data-cloudmrhub-brain-us-east-1",
+                            "key": "CAMRIE/IXI/IXIguy_T1_SE.seq"
+                        }
+                    },
+                    "geometry": {
+                        "isocenter_mm": [
+                            94.18400377035141,
+                            120.23600190877914,
+                            121.23800814151764
+                        ],
+                        "fov_mm": [
+                            186,
+                            238
+                        ],
+                        "matrix": [
+                            186,
+                            238
+                        ],
+                        "slice": {
+                            "num_slices": 5,
+                            "thickness_mm": 2,
+                            "gap_mm": 0
+                        },
+                        "affine": [
+                            [
+                                1,
+                                0,
+                                0,
+                                1.68400377035141
+                            ],
+                            [
+                                0,
+                                1,
+                                0,
+                                1.7360019087791443
+                            ],
+                            [
+                                0,
+                                0,
+                                2,
+                                117.23800814151764
+                            ],
+                            [
+                                0,
+                                0,
+                                0,
+                                1
+                            ]
+                        ],
+                        "ui": {
+                            "orientation": "axial",
+                            "angulation_lr_deg": 0,
+                            "angulation_ap_deg": 0,
+                            "angulation_z_deg": 0,
+                            "slice_offset_mm": [
+                                0,
+                                0,
+                                0
+                            ],
+                            "phase_encoding_direction": "left",
+                            "frequency_encoding_direction": "anterior"
+                        }
+                    }
+                },
+                {
+                    "file": {
+                        "type": "file",
+                        "id": "b2c3d4e5-f6a7-4b8c-9d0e-1f2a3b4c5d6e",
+                        "options": {
+                            "type": "s3",
+                            "filename": "IXIguy_PD_SE.seq",
+                            "options": {},
+                            "bucket": "cloudmr-data-cloudmrhub-brain-us-east-1",
+                            "key": "CAMRIE/IXI/IXIguy_PD_SE.seq"
+                        }
+                    },
+                    "geometry": {
+                        "isocenter_mm": [
+                            94.18400377035141,
+                            120.23600190877914,
+                            121.23800814151764
+                        ],
+                        "fov_mm": [
+                            186,
+                            238
+                        ],
+                        "matrix": [
+                            186,
+                            238
+                        ],
+                        "slice": {
+                            "num_slices": 5,
+                            "thickness_mm": 2,
+                            "gap_mm": 0
+                        },
+                        "affine": [
+                            [
+                                1,
+                                0,
+                                0,
+                                1.68400377035141
+                            ],
+                            [
+                                0,
+                                1,
+                                0,
+                                1.7360019087791443
+                            ],
+                            [
+                                0,
+                                0,
+                                2,
+                                117.23800814151764
+                            ],
+                            [
+                                0,
+                                0,
+                                0,
+                                1
+                            ]
+                        ],
+                        "ui": {
+                            "orientation": "axial",
+                            "angulation_lr_deg": 0,
+                            "angulation_ap_deg": 0,
+                            "angulation_z_deg": 0,
+                            "slice_offset_mm": [
+                                0,
+                                0,
+                                0
+                            ],
+                            "phase_encoding_direction": "left",
+                            "frequency_encoding_direction": "anterior"
+                        }
+                    }
+                }
+            ],
+            "bodymodel": {
+                "type": "file",
+                "id": "7a600342-9117-4259-bd72-0df821837f57",
+                "options": {
+                    "type": "s3",
+                    "filename": "3T_Head_Birdcage_Coil.zip",
+                    "options": {},
+                    "bucket": "cloudmr-data-cloudmrhub-brain-us-east-1",
+                    "key": "CAMRIE/2d39bc29-3a7c-4e89-a6a9-1dc5fce0dea4/9c5e6bc8-8cea-4b0e-bc80-ebf587a181b2_3T_Head_Birdcage_Coil.zip"
+                }
+            },
+            "marie_inputs": {
+                "b0": 3,
+                "nucleus": "1H",
+                "freq": 127732435.55399999,
+                "basis_vie": "PWC",
+                "basis_sie": "RWG",
+                "basis_wie": "Triangle",
+                "phantom": "Duke_2mm",
+                "Number_of_tissues": 21,
+                "resolution": [
+                    0.0020000000000000018,
+                    0.0020000000000000018,
+                    0.0020000000000000018
+                ],
+                "coil": "Head_Birdcage/Type_high_rad_12.3cm_legs_8_len_2cm_mesh_0.0025.msh",
+                "wire": "",
+                "shield": "",
+                "basis_support": "",
+                "basis_file": "",
+                "Number_of_Rx_channels": 2,
+                "Number_of_Tx_channels": 2,
+                "co_simulation": "NO",
+                "EM_Simulator": "MARIE_3.0_WSVIE_version"
+            }
+        }
+    }
+}

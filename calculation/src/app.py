@@ -3,8 +3,21 @@
 CAMRIE Backend – Fargate/Lambda entry point.
 
 Receives a job event (direct payload or S3-trigger), downloads tissue maps
-(rho, T1, T2) and a Pulseq sequence file from S3, runs the MRI simulation
-pipeline (KomaMRI via Julia), and uploads a zipped result bundle to S3.
+(rho, T1, T2) and one or more sequence files from S3, runs the MRI simulation
+pipeline (KomaMRI via Julia), and uploads one zipped result bundle to S3.
+
+The entry points stay stable for local and Batch development:
+  handler(event, context, s3=None)
+  do_process(event, context=None, s3=None)
+
+Accepted payloads:
+  1. Legacy/internal form with direct rho/t1/t2 + sequence descriptors.
+  2. Frontend form with bodymodel ZIP + task.options.sequences[].
+
+For frontend payloads, bodymodel ZIP extraction happens inside this Batch
+container. The ZIP is expected to include an info.json that points to rho/PD,
+T1, and T2 files. This keeps the router Lambda lightweight and makes CPU and
+GPU Batch jobs behave identically.
 
 Input JSON structure expected in `event["task"]["options"]`:
 {
@@ -29,13 +42,16 @@ Input JSON structure expected in `event["task"]["options"]`:
 }
 """
 
+import copy
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
 import traceback
 import uuid
+import zipfile
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -81,6 +97,29 @@ def write_json_file(file_path, data):
         json.dump(sanitize_for_json(data), f, indent=4)
 
 
+def deep_merge(base, override):
+    """Recursively merge two JSON-like dicts without mutating either one."""
+    result = copy.deepcopy(base or {})
+    for key, value in (override or {}).items():
+        if isinstance(value, dict) and isinstance(result.get(key), dict):
+            result[key] = deep_merge(result[key], value)
+        else:
+            result[key] = copy.deepcopy(value)
+    return result
+
+
+def truthy(value):
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ("1", "true", "yes", "y", "on")
+
+
+def safe_slug(value, default="item"):
+    text = str(value or default)
+    text = re.sub(r"[^A-Za-z0-9_.-]+", "_", text).strip("._-")
+    return text[:80] or default
+
+
 # ---------------------------------------------------------------------------
 # S3 / path utilities
 # ---------------------------------------------------------------------------
@@ -105,6 +144,28 @@ def parse_s3_url(url):
     return path, host.split(".")[0]
 
 
+def unwrap_file_descriptor(file_info):
+    """Accept both internal descriptors and frontend {type:file, options:{...}}."""
+    if file_info is None:
+        return None
+    if not isinstance(file_info, dict):
+        raise TypeError(f"File descriptor must be a dict, got {type(file_info).__name__}")
+    if file_info.get("type") == "file" and isinstance(file_info.get("options"), dict):
+        desc = copy.deepcopy(file_info["options"])
+        if file_info.get("id") is not None:
+            desc.setdefault("id", file_info["id"])
+        return desc
+    return copy.deepcopy(file_info)
+
+
+def as_cmr_file_descriptor(file_info):
+    """Convert internal/local descriptors into cloudmr-tools getCMRFile shape."""
+    desc = unwrap_file_descriptor(file_info)
+    if desc.get("type") == "local" and "filename" not in desc and desc.get("local_path"):
+        desc["filename"] = desc["local_path"]
+    return {"type": "file", "id": desc.get("id", -1), "options": desc}
+
+
 def download_from_s3(file_info, s3=None):
     """Resolve a file descriptor to a local path.
 
@@ -113,7 +174,11 @@ def download_from_s3(file_info, s3=None):
       "s3"          – download from S3 bucket/key
       "presigned"   – download via presigned GET URL
     """
-    filename = file_info["filename"]
+    file_info = unwrap_file_descriptor(file_info)
+    filename = (
+        file_info.get("filename")
+        or Path(file_info.get("local_path") or file_info.get("key") or "input").name
+    )
 
     # ── local shortcut (dev / testing) ────────────────────────────────────────
     if file_info.get("type") == "local":
@@ -134,14 +199,396 @@ def download_from_s3(file_info, s3=None):
     else:
         bucket = file_info["bucket"]
         key = file_info["key"]
-        if s3 is None:
-            s3 = boto3.resource("s3")
         logger.write(f"Downloading s3://{bucket}/{key}")
-        s3.Bucket(bucket).download_file(key, str(local_path))
+        try:
+            return ca.getCMRFile(as_cmr_file_descriptor(file_info), s3=s3)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Could not download s3://{bucket}/{key}. "
+                "Check that the frontend file descriptor points to an existing object."
+            ) from exc
 
     file_info["filename"] = str(local_path)
     file_info["type"] = "local"
     return str(local_path)
+
+
+def safe_extract_zip(zip_path, out_dir):
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(zip_path) as zf:
+        for member in zf.infolist():
+            target = (out_dir / member.filename).resolve()
+            try:
+                target.relative_to(out_dir.resolve())
+            except ValueError:
+                raise ValueError(f"Unsafe path inside bodymodel ZIP: {member.filename}")
+            if member.is_dir():
+                target.mkdir(parents=True, exist_ok=True)
+            else:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with zf.open(member) as src, open(target, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
+    return str(out_dir)
+
+
+def find_info_json(root_dir):
+    for path in Path(root_dir).rglob("*"):
+        if path.is_file() and path.name.lower() == "info.json":
+            return path
+    return None
+
+
+def normalize_key(value):
+    return re.sub(r"[^a-z0-9]+", "", str(value).lower())
+
+
+BODYMODEL_ALIASES = {
+    "rho": {"rho", "rhoh", "pd", "protondensity", "protondensitymap", "density"},
+    "t1": {"t1", "t1map", "t1ms", "longitudinalrelaxation"},
+    "t2": {"t2", "t2map", "t2ms", "transverserelaxation"},
+}
+
+
+def candidate_strings(value):
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        preferred = []
+        for key in ("local_path", "path", "filepath", "filename", "file", "name", "key"):
+            item = value.get(key)
+            if isinstance(item, str):
+                preferred.append(item)
+        for item in value.values():
+            preferred.extend(candidate_strings(item))
+        return preferred
+    if isinstance(value, list):
+        found = []
+        for item in value:
+            found.extend(candidate_strings(item))
+        return found
+    return []
+
+
+def candidates_from_info(info, aliases):
+    found = []
+
+    def walk(value, key_hint=None):
+        if normalize_key(key_hint or "") in aliases:
+            found.extend(candidate_strings(value))
+
+        if isinstance(value, dict):
+            role_values = [
+                value.get(k)
+                for k in ("role", "type", "name", "label", "modality", "contrast")
+            ]
+            if any(normalize_key(v) in aliases for v in role_values if v is not None):
+                found.extend(candidate_strings(value))
+            for key, item in value.items():
+                walk(item, key)
+        elif isinstance(value, list):
+            for item in value:
+                walk(item, key_hint)
+
+    walk(info)
+    return found
+
+
+def resolve_relative_path(root_dir, value):
+    if not value or not isinstance(value, str):
+        return None
+    candidate = Path(value)
+    if candidate.is_absolute() and candidate.exists():
+        return candidate
+    candidate = Path(root_dir) / value
+    if candidate.exists():
+        return candidate
+    matches = list(Path(root_dir).rglob(Path(value).name))
+    return matches[0] if matches else None
+
+
+def scan_bodymodel_for_map(root_dir, role):
+    aliases = BODYMODEL_ALIASES[role]
+    extensions = (".nii", ".nii.gz", ".mha", ".mhd", ".nrrd")
+    candidates = []
+    for path in Path(root_dir).rglob("*"):
+        if not path.is_file():
+            continue
+        lower_name = path.name.lower()
+        if not any(lower_name.endswith(ext) for ext in extensions):
+            continue
+        normalized = normalize_key(path.name.replace(".nii.gz", "").replace(".nii", ""))
+        if any(alias in normalized for alias in aliases):
+            candidates.append(path)
+    candidates.sort(key=lambda p: (len(p.name), str(p)))
+    return candidates[0] if candidates else None
+
+
+def resolve_bodymodel_map(root_dir, info, role, required=True):
+    aliases = BODYMODEL_ALIASES[role]
+    for value in candidates_from_info(info, aliases):
+        path = resolve_relative_path(root_dir, value)
+        if path:
+            return str(path)
+    path = scan_bodymodel_for_map(root_dir, role)
+    if path:
+        return str(path)
+    if required:
+        raise FileNotFoundError(
+            f"Could not resolve {role} map from bodymodel info.json or extracted files"
+        )
+    return None
+
+
+def prepare_bodymodel(bodymodel_info, s3):
+    local_path = Path(download_from_s3(bodymodel_info, s3))
+    if local_path.is_dir():
+        root_dir = local_path
+    else:
+        if not zipfile.is_zipfile(local_path):
+            raise ValueError(f"Bodymodel must be a ZIP or directory: {local_path}")
+        root_dir = create_random_temp_dir() / "bodymodel"
+        logger.write(f"Extracting bodymodel ZIP: {local_path}")
+        safe_extract_zip(local_path, root_dir)
+
+    info_path = find_info_json(root_dir)
+    info = {}
+    if info_path:
+        logger.write(f"Bodymodel info.json: {info_path}")
+        with open(info_path, encoding="utf-8") as f:
+            info = json.load(f)
+    else:
+        logger.write("Bodymodel info.json not found; falling back to filename scan")
+
+    return {
+        "root_dir": str(root_dir),
+        "info_path": str(info_path) if info_path else None,
+        "info": info,
+        "rho": resolve_bodymodel_map(root_dir, info, "rho", required=True),
+        "t1": resolve_bodymodel_map(root_dir, info, "t1", required=True),
+        "t2": resolve_bodymodel_map(root_dir, info, "t2", required=False),
+    }
+
+
+def resolve_tissue_maps(opts, s3):
+    if "rho" in opts and "t1" in opts:
+        return {
+            "source": "direct",
+            "bodymodel": None,
+            "rho": download_from_s3(opts["rho"], s3),
+            "t1": download_from_s3(opts["t1"], s3),
+            "t2": download_from_s3(opts.get("t2"), s3) if opts.get("t2") else None,
+        }
+
+    bodymodel = opts.get("bodymodel")
+    if not bodymodel:
+        raise KeyError("Task options must include either rho/t1/t2 or bodymodel")
+
+    body = prepare_bodymodel(bodymodel, s3)
+    logger.write(
+        "Resolved bodymodel maps: "
+        f"rho={body['rho']} t1={body['t1']} t2={body.get('t2')}"
+    )
+    return {
+        "source": "bodymodel",
+        "bodymodel": body,
+        "rho": body["rho"],
+        "t1": body["t1"],
+        "t2": body.get("t2"),
+    }
+
+
+def normalize_vector(value, default):
+    if not value:
+        return default
+    arr = np.array(value, dtype=np.float64)
+    norm = np.linalg.norm(arr)
+    if norm == 0:
+        return default
+    return (arr / norm).tolist()
+
+
+def infer_slice_normal(geo):
+    if geo.get("slice_normal") is not None:
+        return normalize_vector(geo["slice_normal"], [0, 0, 1])
+
+    affine = geo.get("affine")
+    if isinstance(affine, list) and len(affine) >= 3:
+        try:
+            normal = [affine[0][2], affine[1][2], affine[2][2]]
+            return normalize_vector(normal, [0, 0, 1])
+        except Exception:
+            pass
+
+    orientation = str(geo.get("ui", {}).get("orientation", "")).lower()
+    if orientation.startswith("sag"):
+        return [1, 0, 0]
+    if orientation.startswith("cor"):
+        return [0, 1, 0]
+    return [0, 0, 1]
+
+
+def normalize_geometry(geo):
+    geo = copy.deepcopy(geo or {})
+    slice_info = geo.get("slice", {}) if isinstance(geo.get("slice"), dict) else {}
+    return {
+        "isocenter_mm": geo.get("isocenter_mm"),
+        "slice_normal": infer_slice_normal(geo),
+        "num_slices": int(geo.get("num_slices", slice_info.get("num_slices", 5))),
+        "slice_thickness_mm": geo.get("slice_thickness_mm", slice_info.get("thickness_mm")),
+        "slice_gap_mm": float(geo.get("slice_gap_mm", slice_info.get("gap_mm", 0.0))),
+        "fov_mm": geo.get("fov_mm"),
+        "seq_fov_mm": geo.get("seq_fov_mm", geo.get("fov_mm")),
+        "matrix": geo.get("matrix"),
+    }
+
+
+def normalize_simulation(opts, sequence_spec):
+    marie_inputs = opts.get("marie_inputs", {}) if isinstance(opts.get("marie_inputs"), dict) else {}
+    base = copy.deepcopy(opts.get("simulation", {}) or {})
+    if "b0" not in base and marie_inputs.get("b0") is not None:
+        base["b0"] = marie_inputs["b0"]
+    sim = deep_merge(base, sequence_spec.get("simulation", {}) or {})
+    return {
+        "b0": float(sim.get("b0", 3.0)),
+        "spin_factor": int(sim.get("spin_factor", 1)),
+        "n_threads": int(sim.get("n_threads", int(os.getenv("CAMRIE_THREADS", "4")))),
+        "use_gpu": truthy(sim.get("use_gpu", False)),
+        "apply_hamming": truthy(sim.get("apply_hamming", True)),
+        "spins_per_voxel": int(sim.get("spins_per_voxel", 0)),
+        "spin_method": sim.get("spin_method", pipeline.DEFAULT_SPIN_METHOD),
+        "parallel_slices": int(sim.get("parallel_slices", 4)),
+        "slice_padding": float(sim.get("slice_padding", 1.0)),
+        "t2star_factor": float(sim.get("t2star_factor", 1.0)),
+    }
+
+
+def sequence_descriptor_from_spec(sequence_spec):
+    return (
+        sequence_spec.get("sequence")
+        or sequence_spec.get("file")
+        or sequence_spec.get("options")
+        or sequence_spec
+    )
+
+
+def sequence_name(index, sequence_spec, descriptor):
+    desc = unwrap_file_descriptor(descriptor)
+    raw = (
+        sequence_spec.get("name")
+        or sequence_spec.get("alias")
+        or desc.get("filename")
+        or desc.get("key")
+        or f"sequence_{index:03d}"
+    )
+    return Path(str(raw)).name
+
+
+def normalize_sequence_jobs(opts):
+    raw_sequences = opts.get("sequences")
+    if raw_sequences:
+        jobs = []
+        for index, sequence_spec in enumerate(raw_sequences, start=1):
+            descriptor = sequence_descriptor_from_spec(sequence_spec)
+            name = sequence_name(index, sequence_spec, descriptor)
+            jobs.append({
+                "index": index,
+                "name": name,
+                "slug": safe_slug(f"seq{index:03d}_{Path(name).stem}"),
+                "descriptor": descriptor,
+                "geometry": normalize_geometry(
+                    deep_merge(opts.get("geometry", {}) or {}, sequence_spec.get("geometry", {}) or {})
+                ),
+                "simulation": normalize_simulation(opts, sequence_spec),
+                "raw": sequence_spec,
+            })
+        return jobs
+
+    descriptor = opts["sequence"]
+    name = sequence_name(1, {}, descriptor)
+    return [{
+        "index": 1,
+        "name": name,
+        "slug": safe_slug(Path(name).stem or "sequence_001"),
+        "descriptor": descriptor,
+        "geometry": normalize_geometry(opts.get("geometry", {}) or {}),
+        "simulation": normalize_simulation(opts, {}),
+        "raw": {"sequence": descriptor},
+    }]
+
+
+def compute_auto_isocenter(rho_path):
+    import SimpleITK as sitk
+    rho_img = sitk.ReadImage(rho_path)
+    size = np.array(rho_img.GetSize())
+    origin = np.array(rho_img.GetOrigin())
+    spacing = np.array(rho_img.GetSpacing())
+    direction = np.array(rho_img.GetDirection()).reshape(3, 3)
+    return (origin + direction @ ((size - 1) / 2.0 * spacing)).tolist()
+
+
+def add_auxiliary_file(out, src, aux_dir, basename=None):
+    if basename is None:
+        out.addAuxiliaryFile(str(src))
+        return
+    aux_dir = Path(aux_dir)
+    aux_dir.mkdir(parents=True, exist_ok=True)
+    dest = aux_dir / basename
+    shutil.copy2(src, dest)
+    out.addAuxiliaryFile(str(dest))
+
+
+def add_sequence_outputs(out, out_dir, job, multi_sequence, aux_dir):
+    out_path = Path(out_dir)
+    slug = job["slug"]
+    id_base = 0 if not multi_sequence else job["index"] * 100
+    label_prefix = "" if not multi_sequence else f"{job['name']} "
+    basename_prefix = "" if not multi_sequence else f"{slug}_"
+
+    recon_path = out_path / "reconstruction.nii.gz"
+    if recon_path.exists():
+        out.addAble(
+            ima.Imaginable(str(recon_path)),
+            id=id_base + 1,
+            name=f"{label_prefix}Reconstruction".strip(),
+            type="output",
+            basename=f"{basename_prefix}reconstruction.nii.gz",
+        )
+        logger.write(f"Added reconstruction: {recon_path}")
+
+    for ks_id, ks_suffix, ks_label in [
+        (10, "real", "K-Space Real"),
+        (11, "imag", "K-Space Imaginary"),
+        (12, "magnitude", "K-Space Magnitude"),
+    ]:
+        ks_path = out_path / f"kspace_{ks_suffix}.nii.gz"
+        if ks_path.exists():
+            out.addAble(
+                ima.Imaginable(str(ks_path)),
+                id=id_base + ks_id,
+                name=f"{label_prefix}{ks_label}".strip(),
+                type="output",
+                basename=f"{basename_prefix}kspace_{ks_suffix}.nii.gz",
+            )
+
+    series_spec_path = out_path / "series_spec.json"
+    if series_spec_path.exists():
+        add_auxiliary_file(
+            out,
+            series_spec_path,
+            aux_dir,
+            None if not multi_sequence else f"{slug}_series_spec.json",
+        )
+
+    previews_dir = out_path / "previews"
+    if previews_dir.is_dir():
+        for png in sorted(previews_dir.glob("*.png")):
+            add_auxiliary_file(
+                out,
+                png,
+                aux_dir,
+                None if not multi_sequence else f"{slug}_{png.name}",
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -179,160 +626,154 @@ def do_process(event, context=None, s3=None):
             logger.write("Direct payload received")
             info_json = event
 
-        pipelineid = info_json.get("pipeline")
+        task_info = info_json["task"]
+        opts = task_info["options"]
+
+        pipelineid = info_json.get("pipeline") or task_info.get("pipeline")
         token = info_json.get("token")
         user_id = info_json.get("user_id")
         logger.write(f"pipeline={pipelineid}  user={user_id}")
 
-        # ── 2. Task options ─────────────────────────────────────────────────
-        task_info = info_json["task"]
-        opts = task_info["options"]
+        # ── 2. Download body model / tissue maps once ───────────────────────
+        tissue = resolve_tissue_maps(opts, s3)
+        rho_path = tissue["rho"]
+        t1_path = tissue["t1"]
+        t2_path = tissue.get("t2")
+        auto_isocenter_mm = compute_auto_isocenter(rho_path)
+        logger.write(f"Auto isocenter from body model: {auto_isocenter_mm}")
 
-        # ── 3. Download tissue maps + sequence ──────────────────────────────
-        rho_info = opts["rho"]
-        t1_info  = opts["t1"]
-        t2_info  = opts.get("t2")         # optional
-        seq_info = opts["sequence"]
+        # ── 3. Normalize one or more sequence requests ──────────────────────
+        sequence_jobs = normalize_sequence_jobs(opts)
+        multi_sequence = len(sequence_jobs) > 1
+        logger.write(f"Sequence count: {len(sequence_jobs)}")
 
-        rho_path = download_from_s3(rho_info, s3)
-        t1_path  = download_from_s3(t1_info,  s3)
-        t2_path  = download_from_s3(t2_info,  s3) if t2_info else None
-        seq_path = download_from_s3(seq_info, s3)
-        logger.write("All input files downloaded")
-
-        # ── 4. Geometry ─────────────────────────────────────────────────────
-        geo = opts.get("geometry", {})
-        slice_normal      = geo.get("slice_normal", [0, 0, 1])
-        num_slices        = int(geo.get("num_slices", 5))
-        slice_thickness   = geo.get("slice_thickness_mm")  # None → read from .seq
-        slice_gap         = float(geo.get("slice_gap_mm", 0.0))
-        isocenter_mm      = geo.get("isocenter_mm")        # None → auto from rho
-
-        if isocenter_mm is None:
-            import SimpleITK as sitk
-            rho_img = sitk.ReadImage(rho_path)
-            size     = np.array(rho_img.GetSize())
-            origin   = np.array(rho_img.GetOrigin())
-            spacing  = np.array(rho_img.GetSpacing())
-            direction = np.array(rho_img.GetDirection()).reshape(3, 3)
-            isocenter_mm = (origin + direction @ ((size - 1) / 2.0 * spacing)).tolist()
-            logger.write(f"Auto isocenter: {isocenter_mm}")
-
-        # ── 5. Simulation params ────────────────────────────────────────────
-        sim = opts.get("simulation", {})
-        b0           = float(sim.get("b0", 3.0))
-        spin_factor  = int(sim.get("spin_factor", 1))
-        n_threads    = int(sim.get("n_threads", int(os.getenv("CAMRIE_THREADS", "4"))))
-        use_gpu      = bool(sim.get("use_gpu", False))
-        apply_hamming = bool(sim.get("apply_hamming", True))
-        spins_per_voxel  = int(sim.get("spins_per_voxel", 0))
-        spin_method      = sim.get("spin_method", pipeline.DEFAULT_SPIN_METHOD)
-        parallel_slices  = int(sim.get("parallel_slices", 4))
-        slice_padding    = float(sim.get("slice_padding", 1.0))
-        t2star_factor    = float(sim.get("t2star_factor", 1.0))
-
-        # ── 6. Output directory ─────────────────────────────────────────────
+        # ── 4. Output directory ─────────────────────────────────────────────
         out_base = create_random_temp_dir()
-        out_dir  = str(out_base / "OUT")
-        os.makedirs(out_dir, exist_ok=True)
-        logger.write(f"Output dir: {out_dir}")
+        out_root = out_base / "OUT"
+        aux_dir = out_base / "AUX"
+        os.makedirs(out_root, exist_ok=True)
+        logger.write(f"Output root: {out_root}")
 
-        # ── 7. Run pipeline ─────────────────────────────────────────────────
-        logger.write(f"Starting simulation: {num_slices} slices, B0={b0}T, "
-                     f"normal={slice_normal}, spin_factor={spin_factor}")
-
-        volume, series_spec = pipeline.run_pipeline(
-            rho_path=rho_path,
-            t1_path=t1_path,
-            t2_path=t2_path,
-            sequence_file=seq_path,
-            output_dir=out_dir,
-            isocenter_mm=isocenter_mm,
-            slice_normal=slice_normal,
-            num_slices=num_slices,
-            slice_thickness_mm=slice_thickness,
-            slice_gap_mm=slice_gap,
-            spin_factor=spin_factor,
-            b0=b0,
-            use_gpu=use_gpu,
-            n_threads=n_threads,
-            parallel_slices=parallel_slices,
-            apply_hamming=apply_hamming,
-            spins_per_voxel=spins_per_voxel,
-            spin_method=pipeline.normalize_spin_methods(spin_method),
-            slice_padding=slice_padding,
-            t2star_factor=t2star_factor,
-            debug=False,
-        )
-        logger.write("Pipeline completed successfully")
-
-        # ── 8. Package outputs with cmrOutput ───────────────────────────────
+        # ── 5. Package outputs with cmrOutput ───────────────────────────────
         #
         # ID convention (matches old CAMRIE lambda):
         #   1   – Reconstruction (final 3-D NIfTI volume)
         #  10   – K-space real
         #  11   – K-space imaginary
         #  12   – K-space magnitude
+        # For multiple sequences, IDs are offset by sequence_index * 100.
         #
         out = ca.cmrOutput(app="CAMRIE")
         out.setPipeline(pipelineid)
         out.setToken(token)
         out.out["user_id"] = user_id
-        out.out["info"] = sanitize_for_json({
-            "num_slices":      num_slices,
-            "b0":              b0,
-            "spin_factor":     spin_factor,
-            "spins_per_voxel": spins_per_voxel,
-            "parallel_slices": parallel_slices,
-            "n_threads":       n_threads,
-            "slice_padding":   slice_padding,
-            "use_gpu":         use_gpu,
-            "apply_hamming":   apply_hamming,
-            "slice_normal":    slice_normal,
-            "isocenter_mm":    isocenter_mm,
-            "slice_thickness_mm": slice_thickness,
-            "slice_gap_mm":    slice_gap,
-        })
 
-        # Reconstruction volume (id=1)
-        recon_path = Path(out_dir) / "reconstruction.nii.gz"
-        if recon_path.exists():
-            out.addAble(
-                ima.Imaginable(str(recon_path)),
-                id=1, name="Reconstruction", type="output",
-                basename="reconstruction.nii.gz",
+        sequence_results = []
+        for job in sequence_jobs:
+            seq_path = download_from_s3(job["descriptor"], s3)
+            geo = job["geometry"]
+            sim = job["simulation"]
+            isocenter_mm = geo.get("isocenter_mm") or auto_isocenter_mm
+            out_dir = out_root / job["slug"]
+            out_dir.mkdir(parents=True, exist_ok=True)
+
+            logger.write(
+                f"Starting sequence {job['index']}/{len(sequence_jobs)}: {job['name']} "
+                f"({geo['num_slices']} slices, B0={sim['b0']}T, "
+                f"normal={geo['slice_normal']}, spin_factor={sim['spin_factor']})"
             )
-            logger.write(f"Added reconstruction: {recon_path}")
 
-        # K-space NIfTIs – freq × phase × slices, 1 coil (ids 10-12)
-        for ks_id, ks_suffix, ks_label in [
-            (10, "real",      "K-Space Real"),
-            (11, "imag",      "K-Space Imaginary"),
-            (12, "magnitude", "K-Space Magnitude"),
-        ]:
-            ks_path = Path(out_dir) / f"kspace_{ks_suffix}.nii.gz"
-            if ks_path.exists():
-                out.addAble(
-                    ima.Imaginable(str(ks_path)),
-                    id=ks_id, name=ks_label, type="output",
-                    basename=f"kspace_{ks_suffix}.nii.gz",
-                )
+            pipeline.run_pipeline(
+                rho_path=rho_path,
+                t1_path=t1_path,
+                t2_path=t2_path,
+                sequence_file=seq_path,
+                output_dir=str(out_dir),
+                isocenter_mm=isocenter_mm,
+                slice_normal=geo["slice_normal"],
+                num_slices=geo["num_slices"],
+                slice_thickness_mm=geo["slice_thickness_mm"],
+                slice_gap_mm=geo["slice_gap_mm"],
+                fov_mm=geo["fov_mm"],
+                seq_fov_mm=geo["seq_fov_mm"],
+                matrix=geo["matrix"],
+                spin_factor=sim["spin_factor"],
+                b0=sim["b0"],
+                use_gpu=sim["use_gpu"],
+                n_threads=sim["n_threads"],
+                parallel_slices=sim["parallel_slices"],
+                apply_hamming=sim["apply_hamming"],
+                spins_per_voxel=sim["spins_per_voxel"],
+                spin_method=pipeline.normalize_spin_methods(sim["spin_method"]),
+                slice_padding=sim["slice_padding"],
+                t2star_factor=sim["t2star_factor"],
+                debug=False,
+            )
+            logger.write(f"Sequence completed: {job['name']}")
+            add_sequence_outputs(out, out_dir, job, multi_sequence, aux_dir)
 
-        # Series geometry JSON + slice PNG previews as auxiliaries
-        series_spec_path = Path(out_dir) / "series_spec.json"
-        if series_spec_path.exists():
-            out.addAuxiliaryFile(str(series_spec_path))
-        previews_dir = Path(out_dir) / "previews"
-        if previews_dir.is_dir():
-            for png in sorted(previews_dir.glob("*.png")):
-                out.addAuxiliaryFile(str(png))
+            sequence_results.append({
+                "index": job["index"],
+                "name": job["name"],
+                "sequence_file": seq_path,
+                "output_dir": str(out_dir),
+                "geometry": geo,
+                "simulation": sim,
+                "isocenter_mm": isocenter_mm,
+                "status": "succeeded",
+            })
+
+        manifest = {
+            "schema": "camrie.multi_sequence.v1",
+            "pipeline": pipelineid,
+            "sequence_count": len(sequence_results),
+            "bodymodel_source": tissue["source"],
+            "bodymodel": {
+                "root_dir": tissue.get("bodymodel", {}).get("root_dir")
+                if tissue.get("bodymodel") else None,
+                "info_path": tissue.get("bodymodel", {}).get("info_path")
+                if tissue.get("bodymodel") else None,
+            },
+            "tissue_maps": {
+                "rho": rho_path,
+                "t1": t1_path,
+                "t2": t2_path,
+            },
+            "sequences": sequence_results,
+            "output_request": info_json.get("output"),
+        }
+        manifest_path = aux_dir / "camrie_manifest.json"
+        write_json_file(manifest_path, manifest)
+        out.addAuxiliaryFile(str(manifest_path))
+
+        # Keep the old top-level info keys for single-sequence consumers, while
+        # adding the richer manifest for frontend multi-sequence jobs.
+        first = sequence_results[0]
+        first_sim = first["simulation"]
+        first_geo = first["geometry"]
+        out.out["info"] = sanitize_for_json({
+            "sequence_count": len(sequence_results),
+            "sequences": sequence_results,
+            "num_slices": first_geo["num_slices"],
+            "b0": first_sim["b0"],
+            "spin_factor": first_sim["spin_factor"],
+            "spins_per_voxel": first_sim["spins_per_voxel"],
+            "parallel_slices": first_sim["parallel_slices"],
+            "n_threads": first_sim["n_threads"],
+            "slice_padding": first_sim["slice_padding"],
+            "use_gpu": first_sim["use_gpu"],
+            "apply_hamming": first_sim["apply_hamming"],
+            "slice_normal": first_geo["slice_normal"],
+            "isocenter_mm": first["isocenter_mm"],
+            "slice_thickness_mm": first_geo["slice_thickness_mm"],
+            "slice_gap_mm": first_geo["slice_gap_mm"],
+        })
 
         out.setLog(logger)
         out.setOptions(opts)
         out.setTask(task_info)
 
-        # ── 9. Export & upload ──────────────────────────────────────────────
-        result_bucket = os.getenv("ResultsBucketName", "camrie-results")
+        # ── 6. Export & upload ──────────────────────────────────────────────
         export_results = out.exportAndZipResultsToS3(
             bucket=result_bucket, deleteoutputzip=True, s3=s3
         )

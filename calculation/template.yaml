@@ -432,11 +432,23 @@ Resources:
                 return default
 
         def clean_job_name(event):
-            raw = event.get("pipeline") or event.get("pipeline_id") or str(uuid.uuid4())
+            task = event.get("task", {}) if isinstance(event, dict) else {}
+            raw = (
+                event.get("pipeline")
+                or event.get("pipeline_id")
+                or task.get("pipeline")
+                or str(uuid.uuid4())
+            )
             name = re.sub(r"[^A-Za-z0-9_-]", "-", str(raw))[:100].strip("-_")
             return f"camrie-{name or uuid.uuid4().hex[:16]}"
 
+        def unwrap_file(file_spec):
+            if isinstance(file_spec, dict) and file_spec.get("type") == "file":
+                return file_spec.get("options", {})
+            return file_spec
+
         def read_nifti_voxels_per_slice(file_spec):
+            file_spec = unwrap_file(file_spec)
             if not isinstance(file_spec, dict):
                 return DEFAULT_VOXELS_PER_SLICE
 
@@ -469,17 +481,50 @@ Resources:
 
             return DEFAULT_VOXELS_PER_SLICE
 
+        def merged_dict(base, override):
+            merged = dict(base or {})
+            merged.update(override or {})
+            return merged
+
+        def frontend_geometry_to_internal(geo):
+            geo = geo or {}
+            slice_info = geo.get("slice", {}) if isinstance(geo.get("slice"), dict) else {}
+            return {
+                "num_slices": geo.get("num_slices", slice_info.get("num_slices", 1)),
+            }
+
         def estimate_spins(event):
             task = event.get("task", event) if isinstance(event, dict) else {}
             opts = task.get("options", {}) if isinstance(task, dict) else {}
-            sim = opts.get("simulation", {}) if isinstance(opts, dict) else {}
-            geo = opts.get("geometry", {}) if isinstance(opts, dict) else {}
+            if not isinstance(opts, dict):
+                return DEFAULT_VOXELS_PER_SLICE
 
-            n_slices = max(1, as_int(geo.get("num_slices", sim.get("num_slices", 1)), 1))
-            spin_factor = max(1, as_int(sim.get("spin_factor", 1), 1))
-            spins_per_voxel = max(0, as_int(sim.get("spins_per_voxel", 0), 0))
+            base_sim = opts.get("simulation", {}) if isinstance(opts.get("simulation"), dict) else {}
+            base_geo = opts.get("geometry", {}) if isinstance(opts.get("geometry"), dict) else {}
             voxels_per_slice = read_nifti_voxels_per_slice(opts.get("rho"))
-            return n_slices * voxels_per_slice * (spin_factor ** 3) * (1 + spins_per_voxel)
+
+            def estimate_one(seq_spec=None):
+                seq_spec = seq_spec or {}
+                seq_sim = merged_dict(
+                    base_sim,
+                    seq_spec.get("simulation", {}) if isinstance(seq_spec.get("simulation"), dict) else {},
+                )
+                seq_geo_raw = merged_dict(
+                    base_geo,
+                    seq_spec.get("geometry", {}) if isinstance(seq_spec.get("geometry"), dict) else {},
+                )
+                seq_geo = frontend_geometry_to_internal(seq_geo_raw)
+
+                n_slices = max(1, as_int(seq_geo.get("num_slices", seq_sim.get("num_slices", 1)), 1))
+                spin_factor = max(1, as_int(seq_sim.get("spin_factor", 1), 1))
+                spins_per_voxel = max(0, as_int(seq_sim.get("spins_per_voxel", 0), 0))
+                return n_slices * voxels_per_slice * (spin_factor ** 3) * (1 + spins_per_voxel)
+
+            sequences = opts.get("sequences")
+            if isinstance(sequences, list) and sequences:
+                return sum(estimate_one(seq) for seq in sequences)
+
+            return estimate_one()
 
         def event_payload_value(event):
             data_bucket = os.environ.get("DATA_BUCKET", "")
@@ -497,6 +542,13 @@ Resources:
             opts = task.get("options", {}) if isinstance(task, dict) else {}
             sim = opts.get("simulation", {}) if isinstance(opts, dict) else {}
             use_gpu = truthy(sim.get("use_gpu", False))
+            sequences = opts.get("sequences") if isinstance(opts, dict) else None
+            if isinstance(sequences, list):
+                use_gpu = use_gpu or any(
+                    truthy((seq.get("simulation") or {}).get("use_gpu", False))
+                    for seq in sequences
+                    if isinstance(seq, dict)
+                )
 
             gpu_queue = os.environ.get("GPU_JOB_QUEUE", "")
             gpu_definition = os.environ.get("GPU_JOB_DEFINITION", "")

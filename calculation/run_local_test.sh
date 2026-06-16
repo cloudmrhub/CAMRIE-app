@@ -11,6 +11,8 @@
 #   ./run_local_test.sh --seq /path/to/epi.seq  # provide your own sequence
 #   ./run_local_test.sh --skip-phantom          # reuse existing phantom/
 #   ./run_local_test.sh --voxel-mm 1.0          # finer phantom resolution
+#   ./run_local_test.sh --pipeline-src /path/to/MRI_pipeline_dev.py
+#                                                # sync pipeline code before run
 #
 # Tissue parameters (override defaults via env vars or flags below)
 #   --inner-t1 800  --inner-t2 60  --inner-pd 1.0   (inner cylinder)
@@ -27,12 +29,14 @@
 #   --slice-padding 0.5         Slice padding multiplier
 #   --num-slices 250            Number of slices to simulate
 #   --gpu                       Enable GPU simulation (requires CUDA + KomaMRI GPU backend)
+#   --pipeline-src PATH         Copy this MRI_pipeline.py source into src/ before running
 #
 # What it does
 # ------------
 #   1. Check 'koma' conda env is present
-#   2. Auto-copy MRI_pipeline.py + simulate_batch_final.jl from
-#      /data/PROJECTS/makeitKOMA/dev/  (if not already in src/)
+#   2. Optionally sync MRI_pipeline.py from --pipeline-src, or auto-copy
+#      MRI_pipeline.py + simulate_batch_final.jl from /data/PROJECTS/makeitKOMA/dev/
+#      if missing
 #   3. (Re)generate the concentric-cylinder NIfTI phantom
 #   4. Patch event.json with the chosen sequence path
 #   5. Run  src/local_test.py  via conda run -n koma
@@ -69,6 +73,7 @@ SIM_SPIN_FACTOR=""
 SIM_SLICE_PADDING=""
 SIM_NUM_SLICES=""
 SIM_GPU=false
+PIPELINE_SRC="${CAMRIE_PIPELINE_SRC:-}"
 
 # ── parse arguments ───────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -95,6 +100,8 @@ while [[ $# -gt 0 ]]; do
         --slice-padding)         SIM_SLICE_PADDING="$2";     shift 2 ;;
         --num-slices)            SIM_NUM_SLICES="$2";        shift 2 ;;
         --gpu)                   SIM_GPU=true;               shift   ;;
+        --pipeline-src|--mr-pipeline|--mri-pipeline)
+                                  PIPELINE_SRC="$2";         shift 2 ;;
         -h|--help)
             sed -n '2,/^# ====/p' "$0" | grep '^#' | sed 's/^# \?//'
             exit 0 ;;
@@ -119,7 +126,11 @@ conda info --envs 2>/dev/null | grep -q "^koma " \
 ok "conda env 'koma' found"
 
 # Auto-copy pipeline files from the local makeitKOMA checkout if missing
-if [[ ! -f "${PIPELINE_PY}" ]]; then
+if [[ -n "${PIPELINE_SRC}" ]]; then
+    [[ -f "${PIPELINE_SRC}" ]] || fail "Pipeline source not found: ${PIPELINE_SRC}"
+    cp "${PIPELINE_SRC}" "${PIPELINE_PY}"
+    ok "Synced MRI_pipeline.py from ${PIPELINE_SRC}"
+elif [[ ! -f "${PIPELINE_PY}" ]]; then
     if [[ -f "${MAKEITKOMA_DEV}/MRI_pipeline_dev.py" ]]; then
         cp "${MAKEITKOMA_DEV}/MRI_pipeline_dev.py" "${PIPELINE_PY}"
         ok "Auto-copied MRI_pipeline.py from ${MAKEITKOMA_DEV}"
