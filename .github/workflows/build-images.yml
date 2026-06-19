@@ -14,7 +14,7 @@ env:
   # makeitKOMA repo that contains the MRI pipeline (pipeline files are NOT
   # stored in this repo — they are pulled fresh from source on every build)
   MAKEITKOMA_REPO: cloudmrhub/makeitKOMA
-  MAKEITKOMA_REF: camrie-tools-v1
+  MAKEITKOMA_REF: 5186976baf08d9df3d26702c83879bdb3387fced
   # Same ECR repo, separate tags: :latest (CPU/Fargate) and :gpu-latest (EC2/GPU)
   GPU_TAG_SUFFIX: gpu
 
@@ -45,8 +45,9 @@ jobs:
 
       - name: Copy pipeline files into Docker build context
         run: |
-          cp _makeitkoma/dev/MRI_pipeline_dev.py  calculation/src/MRI_pipeline.py
-          cp _makeitkoma/dev/simulate_batch_final.jl calculation/src/simulate_batch_final.jl
+          cp _makeitkoma/src/MRI_pipeline.py calculation/src/MRI_pipeline.py
+          # This upstream revision still invokes the legacy filename from Python.
+          cp _makeitkoma/src/simulate_batch.jl calculation/src/simulate_batch_final.jl
           echo "Pipeline files staged for Docker build:"
           ls -lh calculation/src/MRI_pipeline.py calculation/src/simulate_batch_final.jl
 
@@ -94,6 +95,7 @@ jobs:
 
           # --provenance=false avoids multi-platform manifests that break ECR/ECS
           docker build --provenance=false \
+            --build-arg MAKEITKOMA_SHA="${MAKEITKOMA_REF}" \
             -f DockerfileFargate \
             -t ${FARGATE_REPO}:${IMAGE_TAG} .
 
@@ -126,6 +128,7 @@ jobs:
           echo ""
 
           docker build --provenance=false \
+            --build-arg MAKEITKOMA_SHA="${MAKEITKOMA_REF}" \
             -f DockerfileGpu \
             -t ${FARGATE_REPO}:${GPU_TAG} .
 

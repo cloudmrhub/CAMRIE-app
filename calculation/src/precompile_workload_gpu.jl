@@ -1,4 +1,5 @@
 using KomaMRI
+using KomaInterface
 using CUDA
 using NPZ
 using JSON

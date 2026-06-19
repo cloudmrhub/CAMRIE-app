@@ -21,8 +21,8 @@
             },
             "sequence": {
                 "type": "local",
-                "local_path": "/data/ARTICLES/bodymodelscreation/tse_ETL1_T1w.seq",
-                "filename": "tse_ETL1_T1w.seq"
+                "local_path": "C:/Users/montie01/PROJECTS/CAMRIE-app-1/data/sequences/PD-Weighted_Spin_Echo.mtrk",
+                "filename": "PD-Weighted_Spin_Echo.mtrk"
             },
             "geometry": {
                 "isocenter_mm": null,
@@ -31,17 +31,17 @@
                     0,
                     1
                 ],
-                "num_slices": 4,
+                "num_slices": 1,
                 "slice_thickness_mm": null,
                 "slice_gap_mm": 0.0
             },
             "simulation": {
                 "b0": 1.5,
-                "spin_factor": 4,
+                "spin_factor": 1,
                 "n_threads": 1,
                 "use_gpu": true,
                 "apply_hamming": true,
-                "spins_per_voxel": 1,
+                "spins_per_voxel": 0,
                 "parallel_slices": 1,
                 "slice_padding": 0.5
             }

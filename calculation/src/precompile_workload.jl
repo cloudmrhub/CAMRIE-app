@@ -1,4 +1,5 @@
 using KomaMRI
+using KomaInterface
 using NPZ
 using JSON
 using HDF5

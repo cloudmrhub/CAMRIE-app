@@ -6,9 +6,10 @@
 import Pkg
 
 Pkg.Registry.add("General")
-Pkg.Registry.add(; url="https://github.com/cloudmrhub/CloudRegistry.git")
 
-# Core simulation packages
+# CloudRegistry advertises KomaInterface with an SSH-only URL, so pin its
+# public HTTPS repository explicitly for non-interactive Docker builds.
+Pkg.add(; url="https://github.com/cloudmrhub/KomaInterface.jl.git", rev="4e394f8fed34c9be42fda14a80c8c9f262975547")
 Pkg.add(["KomaMRI", "NPZ", "JSON", "HDF5", "LinearAlgebra"])
 
 # GPU backend — CUDA.jl downloads CUDA toolkit artifacts automatically.
@@ -27,4 +28,5 @@ Pkg.precompile()
 # Verify cache in fresh session (build fails here if broken, not at runtime)
 run(`julia -e 'using KomaMRI, NPZ, JSON, HDF5, CUDA; println("✓ GPU precompile cache verified OK")'`)
 
+run(`julia -e 'using KomaInterface; println("KomaInterface verified")'`)
 println("Julia GPU deps installed and precompiled OK")

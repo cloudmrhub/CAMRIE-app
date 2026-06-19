@@ -590,6 +590,16 @@ def add_sequence_outputs(out, out_dir, job, multi_sequence, aux_dir):
                 None if not multi_sequence else f"{slug}_{png.name}",
             )
 
+    # camrie-tools-v1 writes previews directly into the sequence output
+    # directory. Keep accepting the established previews/ layout as well.
+    for png in sorted(out_path.glob("recon_*.png")):
+        add_auxiliary_file(
+            out,
+            png,
+            aux_dir,
+            None if not multi_sequence else f"{slug}_{png.name}",
+        )
+
 
 # ---------------------------------------------------------------------------
 # Core processing
@@ -652,6 +662,7 @@ def do_process(event, context=None, s3=None):
         out_root = out_base / "OUT"
         aux_dir = out_base / "AUX"
         os.makedirs(out_root, exist_ok=True)
+        aux_dir.mkdir(parents=True, exist_ok=True)
         logger.write(f"Output root: {out_root}")
 
         # ── 5. Package outputs with cmrOutput ───────────────────────────────
@@ -726,6 +737,7 @@ def do_process(event, context=None, s3=None):
         manifest = {
             "schema": "camrie.multi_sequence.v1",
             "pipeline": pipelineid,
+            "makeitkoma_sha": os.getenv("MAKEITKOMA_SHA", "unknown"),
             "sequence_count": len(sequence_results),
             "bodymodel_source": tissue["source"],
             "bodymodel": {

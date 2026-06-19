@@ -11,7 +11,7 @@
 #   ./run_local_test.sh --seq /path/to/epi.seq  # provide your own sequence
 #   ./run_local_test.sh --skip-phantom          # reuse existing phantom/
 #   ./run_local_test.sh --voxel-mm 1.0          # finer phantom resolution
-#   ./run_local_test.sh --pipeline-src /path/to/MRI_pipeline_dev.py
+#   ./run_local_test.sh --pipeline-src /path/to/MRI_pipeline.py
 #                                                # sync pipeline code before run
 #
 # Tissue parameters (override defaults via env vars or flags below)
@@ -35,7 +35,7 @@
 # ------------
 #   1. Check 'koma' conda env is present
 #   2. Optionally sync MRI_pipeline.py from --pipeline-src, or auto-copy
-#      MRI_pipeline.py + simulate_batch_final.jl from /data/PROJECTS/makeitKOMA/dev/
+#      MRI_pipeline.py + simulate_batch.jl from /data/PROJECTS/makeitKOMA/src/
 #      if missing
 #   3. (Re)generate the concentric-cylinder NIfTI phantom
 #   4. Patch event.json with the chosen sequence path
@@ -116,13 +116,13 @@ info() { echo "  →  $*"; }
 section() { echo; echo "── $* ──────────────────────────────────────────"; }
 
 # Known local checkout of makeitKOMA (used for auto-copy below)
-MAKEITKOMA_DEV="/data/PROJECTS/makeitKOMA/dev"
+MAKEITKOMA_SRC="${MAKEITKOMA_SRC:-/data/PROJECTS/makeitKOMA/src}"
 
 # ── 1. Environment checks ─────────────────────────────────────────────────────
 section "Checking environment"
 
-conda info --envs 2>/dev/null | grep -q "^koma " \
-    || fail "'koma' conda environment not found.  Create it first."
+conda run -n koma python --version >/dev/null 2>&1 \
+    || fail "'koma' conda environment not found or cannot run Python. Create it first."
 ok "conda env 'koma' found"
 
 # Auto-copy pipeline files from the local makeitKOMA checkout if missing
@@ -131,26 +131,27 @@ if [[ -n "${PIPELINE_SRC}" ]]; then
     cp "${PIPELINE_SRC}" "${PIPELINE_PY}"
     ok "Synced MRI_pipeline.py from ${PIPELINE_SRC}"
 elif [[ ! -f "${PIPELINE_PY}" ]]; then
-    if [[ -f "${MAKEITKOMA_DEV}/MRI_pipeline_dev.py" ]]; then
-        cp "${MAKEITKOMA_DEV}/MRI_pipeline_dev.py" "${PIPELINE_PY}"
-        ok "Auto-copied MRI_pipeline.py from ${MAKEITKOMA_DEV}"
+    if [[ -f "${MAKEITKOMA_SRC}/MRI_pipeline.py" ]]; then
+        cp "${MAKEITKOMA_SRC}/MRI_pipeline.py" "${PIPELINE_PY}"
+        ok "Auto-copied MRI_pipeline.py from ${MAKEITKOMA_SRC}"
     else
         fail "MRI_pipeline.py not found at ${PIPELINE_PY}
        Copy it manually:
-         cp /path/to/makeitKOMA/dev/MRI_pipeline_dev.py ${PIPELINE_PY}"
+         cp /path/to/makeitKOMA/src/MRI_pipeline.py ${PIPELINE_PY}"
     fi
 else
     ok "MRI_pipeline.py present"
 fi
 
 if [[ ! -f "${PIPELINE_JL}" ]]; then
-    if [[ -f "${MAKEITKOMA_DEV}/simulate_batch_final.jl" ]]; then
-        cp "${MAKEITKOMA_DEV}/simulate_batch_final.jl" "${PIPELINE_JL}"
-        ok "Auto-copied simulate_batch_final.jl from ${MAKEITKOMA_DEV}"
+    if [[ -f "${MAKEITKOMA_SRC}/simulate_batch.jl" ]]; then
+        # MRI_pipeline.py in this upstream revision still invokes the legacy name.
+        cp "${MAKEITKOMA_SRC}/simulate_batch.jl" "${PIPELINE_JL}"
+        ok "Auto-copied simulate_batch.jl from ${MAKEITKOMA_SRC}"
     else
         fail "simulate_batch_final.jl not found at ${PIPELINE_JL}
        Copy it manually:
-         cp /path/to/makeitKOMA/dev/simulate_batch_final.jl ${PIPELINE_JL}"
+         cp /path/to/makeitKOMA/src/simulate_batch.jl ${PIPELINE_JL}"
     fi
 else
     ok "simulate_batch_final.jl present"
@@ -270,7 +271,7 @@ RESULT_ZIP=$(find "${OUT_DIR}" -name "*.zip" -newer "${EVENT_FILE}" 2>/dev/null 
 if [[ -n "${RESULT_ZIP}" ]]; then
     ok "Result ZIP: ${RESULT_ZIP}"
     info "Contents:"
-    python3 -c "
+    conda run --no-capture-output -n koma python -c "
 import zipfile, sys
 with zipfile.ZipFile('${RESULT_ZIP}') as z:
     for n in z.namelist():

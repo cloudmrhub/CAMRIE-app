@@ -1,6 +1,6 @@
 # ==============================================================================
 #  CAMRIE CPU image
-#  Python 3.11 + Julia 1.11 + KomaMRI sysimage
+#  Python 3.11 + Julia 1.12 + KomaMRI sysimage
 #  Used by AWS Batch on Fargate Spot.
 # ==============================================================================
 FROM python:3.11-slim AS julia-builder
@@ -13,10 +13,10 @@ RUN apt-get update \
         build-essential git ca-certificates wget curl libgomp1 \
  && rm -rf /var/lib/apt/lists/*
 
-# -- Julia 1.11 ---------------------------------------------------------------
-ARG JULIA_VERSION=1.11.4
+# -- Julia 1.12 ---------------------------------------------------------------
+ARG JULIA_VERSION=1.12.6
 RUN mkdir -p /opt/julia \
- && wget -q https://julialang-s3.julialang.org/bin/linux/x64/1.11/julia-${JULIA_VERSION}-linux-x86_64.tar.gz \
+ && wget -q https://julialang-s3.julialang.org/bin/linux/x64/1.12/julia-${JULIA_VERSION}-linux-x86_64.tar.gz \
  && tar -xzf julia-${JULIA_VERSION}-linux-x86_64.tar.gz -C /opt/julia --strip-components=1 \
  && rm julia-${JULIA_VERSION}-linux-x86_64.tar.gz \
  && ln -s /opt/julia/bin/julia /usr/local/bin/julia
@@ -32,7 +32,7 @@ RUN julia /tmp/install_julia_deps.jl
 
 RUN julia -e 'import Pkg; Pkg.add("PackageCompiler"); Pkg.precompile()'
 COPY precompile_workload.jl /tmp/precompile_workload.jl
-RUN julia -e 'using PackageCompiler; create_sysimage([:KomaMRI, :NPZ, :JSON, :HDF5, :LinearAlgebra]; sysimage_path="/opt/julia-depot/komamri-sysimage.so", precompile_execution_file="/tmp/precompile_workload.jl")'
+RUN julia -e 'using PackageCompiler; create_sysimage([:KomaInterface, :KomaMRI, :NPZ, :JSON, :HDF5, :LinearAlgebra]; sysimage_path="/opt/julia-depot/komamri-sysimage.so", precompile_execution_file="/tmp/precompile_workload.jl")'
 
 # ==============================================================================
 #  Final runtime image
@@ -53,6 +53,8 @@ ENV JULIA_DEPOT_PATH=/opt/julia-depot
 ENV JULIA_CPU_TARGET=generic
 ENV JULIA_PKG_DISABLE_PKGIMAGES=true
 ENV CAMRIE_JULIA_SYSIMAGE=/opt/julia-depot/komamri-sysimage.so
+ARG MAKEITKOMA_SHA=unknown
+ENV MAKEITKOMA_SHA=${MAKEITKOMA_SHA}
 ENV PATH=/usr/local/bin:/opt/julia/bin:$PATH
 
 # Production code invokes "julia" directly. Keep that interface and inject the
@@ -70,7 +72,7 @@ RUN pip install --upgrade pip \
 
 COPY . .
 
-RUN julia -e 'using KomaMRI, NPZ, JSON, HDF5; println("CPU sysimage OK")'
+RUN julia -e 'using KomaInterface, KomaMRI, NPZ, JSON, HDF5; println("CPU sysimage OK")'
 
 RUN mkdir -p /tmp/.matplotlib /tmp/.fontconfig && chmod 777 /tmp/.matplotlib /tmp/.fontconfig
 ENV MPLCONFIGDIR=/tmp/.matplotlib
