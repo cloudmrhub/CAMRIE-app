@@ -6,6 +6,7 @@ juliaup add 1.12.6
 $env:JULIA_SSL_CA_ROOTS_PATH = ''
 Remove-Item Env:SSL_CERT_FILE -ErrorAction SilentlyContinue
 julia +1.12.6 src/install_julia_deps.jl
+julia +1.12.6 src/install_julia_deps_gpu.jl
 
 & "$env:LOCALAPPDATA\Programs\Git\usr\bin\bash.exe" -lc '
   cd /c/Users/montie01/PROJECTS/CAMRIE-app-1/calculation

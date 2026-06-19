@@ -9,7 +9,7 @@ import Pkg
 # HTTPS because CloudRegistry currently advertises its SSH-only repository URL,
 # which is unavailable inside Docker builds.
 Pkg.Registry.add("General")
-Pkg.add(; url="https://github.com/cloudmrhub/KomaInterface.jl.git", rev="4e394f8fed34c9be42fda14a80c8c9f262975547")
+Pkg.add(; url="https://github.com/cloudmrhub/KomaInterface.jl.git", rev="261c711483091971b56c20d1bf5b36d3161c60e5")
 Pkg.add(["KomaMRI", "NPZ", "JSON", "HDF5", "LinearAlgebra"])
 
 # Force full precompilation
