@@ -9,6 +9,7 @@
 # -----
 #   ./run_local_test.sh                         # generate phantom + run
 #   ./run_local_test.sh --seq /path/to/epi.seq  # provide your own sequence
+#   ./run_local_test.sh --event eventGPU.json   # choose a separate event file
 #   ./run_local_test.sh --skip-phantom          # reuse existing phantom/
 #   ./run_local_test.sh --voxel-mm 1.0          # finer phantom resolution
 #   ./run_local_test.sh --pipeline-src /path/to/MRI_pipeline.py
@@ -20,6 +21,7 @@
 #   --inner-r 3     --outer-r 6    --height 5        (geometry in cm)
 #
 # Simulation parameters (patch event.json before running)
+#   --event PATH                 Event JSON to patch and run (default: event.json)
 #   --b0 1.5                    B0 field strength in Tesla (default: from event.json)
 #   --spins-per-voxel-gre 64    Extra spins per voxel for GRE (default: from event.json)
 #   --use-model-axial-normal    Force axial slice normal [0,0,1]
@@ -53,7 +55,7 @@ PHANTOM_DIR="${SCRIPT_DIR}/phantom"
 OUT_DIR="${SCRIPT_DIR}/local_out"
 EVENT_FILE="${SCRIPT_DIR}/event.json"
 PIPELINE_PY="${SRC}/MRI_pipeline.py"
-PIPELINE_JL="${SRC}/simulate_batch_final.jl"
+PIPELINE_JL="${SRC}/simulate_batch.jl"
 
 # ── defaults ──────────────────────────────────────────────────────────────────
 SEQ_FILE=""
@@ -79,6 +81,7 @@ PIPELINE_SRC="${CAMRIE_PIPELINE_SRC:-}"
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --seq)                   SEQ_FILE="$2";              shift 2 ;;
+        --event)                 EVENT_FILE="$2";            shift 2 ;;
         --skip-phantom)          SKIP_PHANTOM=true;          shift   ;;
         --voxel-mm)              VOXEL_MM="$2";              shift 2 ;;
         --inner-r)               INNER_R="$2";               shift 2 ;;
@@ -109,6 +112,11 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+if [[ "${EVENT_FILE}" != /* ]]; then
+    EVENT_FILE="${SCRIPT_DIR}/${EVENT_FILE}"
+fi
+[[ -f "${EVENT_FILE}" ]] || { echo "Event file not found: ${EVENT_FILE}" >&2; exit 1; }
+
 # ── helpers ───────────────────────────────────────────────────────────────────
 ok()   { echo "  ✓  $*"; }
 fail() { echo "  ✗  $*" >&2; exit 1; }
@@ -125,36 +133,33 @@ conda run -n koma python --version >/dev/null 2>&1 \
     || fail "'koma' conda environment not found or cannot run Python. Create it first."
 ok "conda env 'koma' found"
 
-# Auto-copy pipeline files from the local makeitKOMA checkout if missing
+# Sync pipeline files from the local makeitKOMA checkout. This keeps local
+# tests aligned with the selected upstream branch even when a previous test
+# has already staged ignored copies in src/.
 if [[ -n "${PIPELINE_SRC}" ]]; then
     [[ -f "${PIPELINE_SRC}" ]] || fail "Pipeline source not found: ${PIPELINE_SRC}"
     cp "${PIPELINE_SRC}" "${PIPELINE_PY}"
     ok "Synced MRI_pipeline.py from ${PIPELINE_SRC}"
+elif [[ -f "${MAKEITKOMA_SRC}/MRI_pipeline.py" ]]; then
+    cp "${MAKEITKOMA_SRC}/MRI_pipeline.py" "${PIPELINE_PY}"
+    ok "Synced MRI_pipeline.py from ${MAKEITKOMA_SRC}"
 elif [[ ! -f "${PIPELINE_PY}" ]]; then
-    if [[ -f "${MAKEITKOMA_SRC}/MRI_pipeline.py" ]]; then
-        cp "${MAKEITKOMA_SRC}/MRI_pipeline.py" "${PIPELINE_PY}"
-        ok "Auto-copied MRI_pipeline.py from ${MAKEITKOMA_SRC}"
-    else
-        fail "MRI_pipeline.py not found at ${PIPELINE_PY}
+    fail "MRI_pipeline.py not found at ${PIPELINE_PY}
        Copy it manually:
          cp /path/to/makeitKOMA/src/MRI_pipeline.py ${PIPELINE_PY}"
-    fi
 else
     ok "MRI_pipeline.py present"
 fi
 
-if [[ ! -f "${PIPELINE_JL}" ]]; then
-    if [[ -f "${MAKEITKOMA_SRC}/simulate_batch.jl" ]]; then
-        # MRI_pipeline.py in this upstream revision still invokes the legacy name.
-        cp "${MAKEITKOMA_SRC}/simulate_batch.jl" "${PIPELINE_JL}"
-        ok "Auto-copied simulate_batch.jl from ${MAKEITKOMA_SRC}"
-    else
-        fail "simulate_batch_final.jl not found at ${PIPELINE_JL}
+if [[ -f "${MAKEITKOMA_SRC}/simulate_batch.jl" ]]; then
+    cp "${MAKEITKOMA_SRC}/simulate_batch.jl" "${PIPELINE_JL}"
+    ok "Synced simulate_batch.jl from ${MAKEITKOMA_SRC}"
+elif [[ ! -f "${PIPELINE_JL}" ]]; then
+    fail "simulate_batch.jl not found at ${PIPELINE_JL}
        Copy it manually:
          cp /path/to/makeitKOMA/src/simulate_batch.jl ${PIPELINE_JL}"
-    fi
 else
-    ok "simulate_batch_final.jl present"
+    ok "simulate_batch.jl present"
 fi
 
 # ── 2. Phantom ────────────────────────────────────────────────────────────────
@@ -270,14 +275,7 @@ section "Done"
 RESULT_ZIP=$(find "${OUT_DIR}" -name "*.zip" -newer "${EVENT_FILE}" 2>/dev/null | sort | tail -1)
 if [[ -n "${RESULT_ZIP}" ]]; then
     ok "Result ZIP: ${RESULT_ZIP}"
-    info "Contents:"
-    conda run --no-capture-output -n koma python -c "
-import zipfile, sys
-with zipfile.ZipFile('${RESULT_ZIP}') as z:
-    for n in z.namelist():
-        info = z.getinfo(n)
-        print(f'    {info.file_size:>10,}  {n}')
-"
+    info "Contents: open the ZIP with your archive viewer to inspect its files."
 else
     echo "  (no new ZIP found — check output above for errors)"
 fi

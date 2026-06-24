@@ -14,7 +14,7 @@ env:
   # makeitKOMA repo that contains the MRI pipeline (pipeline files are NOT
   # stored in this repo — they are pulled fresh from source on every build)
   MAKEITKOMA_REPO: cloudmrhub/makeitKOMA
-  MAKEITKOMA_REF: 5186976baf08d9df3d26702c83879bdb3387fced
+  MAKEITKOMA_REF: 0ce7bb53286cb04b30bc65bf2b113b34bb97c140
   # Same ECR repo, separate tags: :latest (CPU/Fargate) and :gpu-latest (EC2/GPU)
   GPU_TAG_SUFFIX: gpu
 
@@ -46,10 +46,10 @@ jobs:
       - name: Copy pipeline files into Docker build context
         run: |
           cp _makeitkoma/src/MRI_pipeline.py calculation/src/MRI_pipeline.py
-          # This upstream revision still invokes the legacy filename from Python.
-          cp _makeitkoma/src/simulate_batch.jl calculation/src/simulate_batch_final.jl
+          # camrie-tools-v1 invokes simulate_batch.jl directly.
+          cp _makeitkoma/src/simulate_batch.jl calculation/src/simulate_batch.jl
           echo "Pipeline files staged for Docker build:"
-          ls -lh calculation/src/MRI_pipeline.py calculation/src/simulate_batch_final.jl
+          ls -lh calculation/src/MRI_pipeline.py calculation/src/simulate_batch.jl
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4

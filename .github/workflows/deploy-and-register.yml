@@ -36,7 +36,7 @@ env:
   FARGATE_REPO: camrie-fargate
   APP_NAME: CAMRIE
   MAKEITKOMA_REPO: cloudmrhub/makeitKOMA
-  MAKEITKOMA_REF: 5186976baf08d9df3d26702c83879bdb3387fced
+  MAKEITKOMA_REF: 0ce7bb53286cb04b30bc65bf2b113b34bb97c140
 
 permissions:
   id-token: write
@@ -65,8 +65,8 @@ jobs:
       - name: Copy pipeline files into build context
         run: |
           cp _makeitkoma/src/MRI_pipeline.py calculation/src/MRI_pipeline.py
-          # Compatibility filename required by MRI_pipeline.py at this revision.
-          cp _makeitkoma/src/simulate_batch.jl calculation/src/simulate_batch_final.jl
+          # camrie-tools-v1 invokes simulate_batch.jl directly.
+          cp _makeitkoma/src/simulate_batch.jl calculation/src/simulate_batch.jl
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4

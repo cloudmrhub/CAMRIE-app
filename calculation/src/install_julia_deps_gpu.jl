@@ -7,14 +7,14 @@ import Pkg
 
 Pkg.Registry.add("General")
 
-# CloudRegistry advertises KomaInterface with an SSH-only URL, so pin its
-# public HTTPS repository explicitly for non-interactive Docker builds.
-Pkg.add(; url="https://github.com/cloudmrhub/KomaInterface.jl.git", rev="261c711483091971b56c20d1bf5b36d3161c60e5")
-Pkg.add(["KomaMRI", "NPZ", "JSON", "HDF5", "LinearAlgebra"])
+# KomaInterface is sourced from public HTTPS because it is not registered in
+# General; its remaining Julia packages resolve transitively.
+Pkg.add(; url="https://github.com/cloudmrhub/KomaInterface.jl.git")
 
 # GPU backend — CUDA.jl downloads CUDA toolkit artifacts automatically.
 # The NVIDIA driver is provided by the EC2 GPU instance at runtime.
 Pkg.add("CUDA")
+Pkg.update()
 
 # CRITICAL: set the CUDA runtime version preference NOW (at build time, without a GPU).
 # Without this, CUDA.jl tries to auto-detect from the driver (libcuda.so) at startup —

@@ -36,9 +36,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DOCKER_CONTEXT="${SCRIPT_DIR}/../calculation/src"
 
 # Copy the MRI pipeline and Julia batch script from makeitKOMA into the build context
-MAKEITKOMA_DIR="/data/PROJECTS/makeitKOMA"
-cp "${MAKEITKOMA_DIR}/dev/MRI_pipeline_dev.py"      "${DOCKER_CONTEXT}/MRI_pipeline.py"
-cp "${MAKEITKOMA_DIR}/dev/simulate_batch_final.jl"  "${DOCKER_CONTEXT}/simulate_batch_final.jl"
+MAKEITKOMA_DIR="${MAKEITKOMA_DIR:-/data/PROJECTS/makeitKOMA}"
+cp "${MAKEITKOMA_DIR}/src/MRI_pipeline.py"      "${DOCKER_CONTEXT}/MRI_pipeline.py"
+cp "${MAKEITKOMA_DIR}/src/simulate_batch.jl"  "${DOCKER_CONTEXT}/simulate_batch.jl"
 
 docker build \
   -f "${DOCKER_CONTEXT}/DockerfileFargate" \
