@@ -390,7 +390,9 @@ Resources:
       Policies:
         - Statement:
             - Effect: Allow
-              Action: [batch:SubmitJob]
+              Action: 
+                - batch:SubmitJob
+                - batch:TagResource    # <-- add this
               Resource: "*"
             - Effect: Allow
               Action: [iam:PassRole]
