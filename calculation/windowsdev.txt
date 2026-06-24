@@ -36,3 +36,21 @@ julia +1.12.6 src/install_julia_deps_gpu.jl
     --gpu --num-slices 1 --spin-factor 1 --spins-per-voxel 1 \
     --parallel-slices 1 --jobs 1
 '
+
+
+
+& "$env:LOCALAPPDATA\Programs\Git\usr\bin\bash.exe" -lc '
+  source /c/Users/montie01/AppData/Local/anaconda3/etc/profile.d/conda.sh
+  conda activate koma
+  export MAKEITKOMA_SRC=/c/Users/montie01/PROJECTS/makeitKOMA/src
+  cd /c/Users/montie01/PROJECTS/CAMRIE-app-1/calculation
+  source ./run_local_test.sh \
+    --skip-phantom \
+    --seq /c/Users/montie01/PROJECTS/CAMRIE-app-1/data/sequences/PD-Weighted_Spin_Echo.mtrk \
+    --num-slices 1 --spin-factor 1 --spins-per-voxel 1 \
+    --parallel-slices 1 --jobs 1
+'
+
+
+
+  & "$env:LOCALAPPDATA\Programs\Git\usr\bin\bash.exe" -lc 'source /c/Users/montie01/AppData/Local/anaconda3/etc/profile.d/conda.sh; conda activate koma; export MAKEITKOMA_SRC=/c/Users/montie01/PROJECTS/makeitKOMA/src; cd /c/Users/montie01/PROJECTS/CAMRIE-app-1/calculation; source ./run_local_test.sh --event eventGPU.json --skip-phantom --seq /c/Users/montie01/PROJECTS/CAMRIE-app-1/data/sequences/PD-Weighted_Spin_Echo.mtrk --gpu --num-slices 1 --spin-factor 1 --spins-per-voxel 0 --parallel-slices 1 --jobs 1'
