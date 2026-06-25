@@ -7,13 +7,11 @@
 #
 # Usage
 # -----
-#   ./run_local_test.sh                         # generate phantom + run
+#   ./run_local_test.sh                         # generate packaged phantom + run
 #   ./run_local_test.sh --seq /path/to/epi.seq  # provide your own sequence
 #   ./run_local_test.sh --event eventGPU.json   # choose a separate event file
 #   ./run_local_test.sh --skip-phantom          # reuse existing phantom/
 #   ./run_local_test.sh --voxel-mm 1.0          # finer phantom resolution
-#   ./run_local_test.sh --pipeline-src /path/to/MRI_pipeline.py
-#                                                # sync pipeline code before run
 #
 # Tissue parameters (override defaults via env vars or flags below)
 #   --inner-t1 800  --inner-t2 60  --inner-pd 1.0   (inner cylinder)
@@ -31,18 +29,14 @@
 #   --slice-padding 0.5         Slice padding multiplier
 #   --num-slices 250            Number of slices to simulate
 #   --gpu                       Enable GPU simulation (requires CUDA + KomaMRI GPU backend)
-#   --pipeline-src PATH         Copy this MRI_pipeline.py source into src/ before running
 #
 # What it does
 # ------------
 #   1. Check 'koma' conda env is present
-#   2. Optionally sync MRI_pipeline.py from --pipeline-src, or auto-copy
-#      MRI_pipeline.py + simulate_batch.jl from /data/PROJECTS/makeitKOMA/src/
-#      if missing
-#   3. (Re)generate the concentric-cylinder NIfTI phantom
-#   4. Patch event.json with the chosen sequence path
-#   5. Run  src/local_test.py  via conda run -n koma
-#   6. Print location of results ZIP
+#   2. (Re)generate the packaged concentric-cylinder NIfTI phantom
+#   3. Patch event.json with the chosen sequence path
+#   4. Run  src/local_test.py  via conda run -n koma
+#   5. Print location of results ZIP
 # =============================================================================
 
 set -euo pipefail
@@ -54,8 +48,6 @@ SRC="${SCRIPT_DIR}/src"
 PHANTOM_DIR="${SCRIPT_DIR}/phantom"
 OUT_DIR="${SCRIPT_DIR}/local_out"
 EVENT_FILE="${SCRIPT_DIR}/event.json"
-PIPELINE_PY="${SRC}/MRI_pipeline.py"
-PIPELINE_JL="${SRC}/simulate_batch.jl"
 
 # ── defaults ──────────────────────────────────────────────────────────────────
 SEQ_FILE=""
@@ -75,7 +67,6 @@ SIM_SPIN_FACTOR=""
 SIM_SLICE_PADDING=""
 SIM_NUM_SLICES=""
 SIM_GPU=false
-PIPELINE_SRC="${CAMRIE_PIPELINE_SRC:-}"
 
 # ── parse arguments ───────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -103,8 +94,6 @@ while [[ $# -gt 0 ]]; do
         --slice-padding)         SIM_SLICE_PADDING="$2";     shift 2 ;;
         --num-slices)            SIM_NUM_SLICES="$2";        shift 2 ;;
         --gpu)                   SIM_GPU=true;               shift   ;;
-        --pipeline-src|--mr-pipeline|--mri-pipeline)
-                                  PIPELINE_SRC="$2";         shift 2 ;;
         -h|--help)
             sed -n '2,/^# ====/p' "$0" | grep '^#' | sed 's/^# \?//'
             exit 0 ;;
@@ -123,8 +112,6 @@ fail() { echo "  ✗  $*" >&2; exit 1; }
 info() { echo "  →  $*"; }
 section() { echo; echo "── $* ──────────────────────────────────────────"; }
 
-# Known local checkout of makeitKOMA (used for auto-copy below)
-MAKEITKOMA_SRC="${MAKEITKOMA_SRC:-/data/PROJECTS/makeitKOMA/src}"
 
 # ── 1. Environment checks ─────────────────────────────────────────────────────
 section "Checking environment"
@@ -133,34 +120,29 @@ conda run -n koma python --version >/dev/null 2>&1 \
     || fail "'koma' conda environment not found or cannot run Python. Create it first."
 ok "conda env 'koma' found"
 
-# Sync pipeline files from the local makeitKOMA checkout. This keeps local
-# tests aligned with the selected upstream branch even when a previous test
-# has already staged ignored copies in src/.
-if [[ -n "${PIPELINE_SRC}" ]]; then
-    [[ -f "${PIPELINE_SRC}" ]] || fail "Pipeline source not found: ${PIPELINE_SRC}"
-    cp "${PIPELINE_SRC}" "${PIPELINE_PY}"
-    ok "Synced MRI_pipeline.py from ${PIPELINE_SRC}"
-elif [[ -f "${MAKEITKOMA_SRC}/MRI_pipeline.py" ]]; then
-    cp "${MAKEITKOMA_SRC}/MRI_pipeline.py" "${PIPELINE_PY}"
-    ok "Synced MRI_pipeline.py from ${MAKEITKOMA_SRC}"
-elif [[ ! -f "${PIPELINE_PY}" ]]; then
-    fail "MRI_pipeline.py not found at ${PIPELINE_PY}
-       Copy it manually:
-         cp /path/to/makeitKOMA/src/MRI_pipeline.py ${PIPELINE_PY}"
-else
-    ok "MRI_pipeline.py present"
-fi
+conda run -n koma python - <<'PYEOF' >/dev/null 2>&1 || fail "Python package 'camrie-tools' is not installed from cloudmrhub/camrie-tools@v1 in conda env 'koma'.
+       Install/update the local dev package with:
+         pip install --upgrade --force-reinstall "camrie-tools @ git+https://github.com/cloudmrhub/camrie-tools.git@v1"
+       Then install Julia deps with:
+         camrie-install-julia --cpu --update    # CPU local dev
+         camrie-install-julia --update          # GPU local dev"
+import importlib.metadata as md, json
+from pathlib import Path
+from camrie_tools import MRI_pipeline
+from camrie_tools._reconstruction_smoke import create_concentric_cylinder_phantom
+dist = md.distribution("camrie-tools")
+direct = Path(dist._path) / "direct_url.json"
+data = json.loads(direct.read_text()) if direct.exists() else {}
+url = data.get("url", "")
+if "cloudmrhub/camrie-tools" not in url.replace(".git", ""):
+    raise SystemExit(f"camrie-tools is not installed from cloudmrhub/camrie-tools: {url or dist.locate_file('')}")
+PYEOF
+ok "camrie-tools git package importable"
 
-if [[ -f "${MAKEITKOMA_SRC}/simulate_batch.jl" ]]; then
-    cp "${MAKEITKOMA_SRC}/simulate_batch.jl" "${PIPELINE_JL}"
-    ok "Synced simulate_batch.jl from ${MAKEITKOMA_SRC}"
-elif [[ ! -f "${PIPELINE_JL}" ]]; then
-    fail "simulate_batch.jl not found at ${PIPELINE_JL}
-       Copy it manually:
-         cp /path/to/makeitKOMA/src/simulate_batch.jl ${PIPELINE_JL}"
-else
-    ok "simulate_batch.jl present"
-fi
+CAMRIE_JULIA_PROJECT="${CAMRIE_JULIA_PROJECT:-$(conda run -n koma python -c 'from camrie_tools._julia import DEFAULT_PROJECT_DIR; print(DEFAULT_PROJECT_DIR)')}"
+export CAMRIE_JULIA_PROJECT
+export JULIA_PROJECT="${CAMRIE_JULIA_PROJECT}"
+ok "CAMRIE Julia project: ${CAMRIE_JULIA_PROJECT}"
 
 # ── 2. Phantom ────────────────────────────────────────────────────────────────
 section "Phantom"
@@ -169,18 +151,84 @@ if [[ "${SKIP_PHANTOM}" == true && -f "${PHANTOM_DIR}/rho.nii" ]]; then
     ok "Reusing existing phantom in ${PHANTOM_DIR}"
 else
     info "Generating phantom (voxel=${VOXEL_MM} mm, inner=${INNER_R} cm, outer=${OUTER_R} cm, h=${HEIGHT} cm) ..."
-    conda run -n koma python "${SCRIPT_DIR}/make_phantom.py" \
-        --out-dir    "${PHANTOM_DIR}" \
-        --voxel-mm   "${VOXEL_MM}"   \
-        --inner-r    "${INNER_R}"    \
-        --outer-r    "${OUTER_R}"    \
-        --height     "${HEIGHT}"     \
-        --inner-pd   "${INNER_PD}"   \
-        --inner-t1   "${INNER_T1}"   \
-        --inner-t2   "${INNER_T2}"   \
-        --outer-pd   "${OUTER_PD}"   \
-        --outer-t1   "${OUTER_T1}"   \
-        --outer-t2   "${OUTER_T2}"
+    conda run -n koma python - "${PHANTOM_DIR}" "${VOXEL_MM}" \
+        "${INNER_R}" "${OUTER_R}" "${HEIGHT}" \
+        "${INNER_PD}" "${INNER_T1}" "${INNER_T2}" \
+        "${OUTER_PD}" "${OUTER_T1}" "${OUTER_T2}" <<'PYEOF'
+from pathlib import Path
+import sys
+
+import numpy as np
+import SimpleITK as sitk
+from camrie_tools._reconstruction_smoke import create_concentric_cylinder_phantom
+
+out_dir = Path(sys.argv[1])
+voxel_mm = float(sys.argv[2])
+inner_radius_mm = float(sys.argv[3]) * 10.0
+outer_radius_mm = float(sys.argv[4]) * 10.0
+height_mm = float(sys.argv[5]) * 10.0
+inner_pd = float(sys.argv[6])
+inner_t1_ms = float(sys.argv[7])
+inner_t2_ms = float(sys.argv[8])
+outer_pd = float(sys.argv[9])
+outer_t1_ms = float(sys.argv[10])
+outer_t2_ms = float(sys.argv[11])
+
+# camrie-tools defines the local smoke phantom as a Koma spin phantom.
+# CAMRIE local events still consume rho/t1/t2 NIfTI maps, so rasterize
+# that packaged definition into a centered 3D cylinder for local testing.
+fov_mm = max(300.0, 2.5 * outer_radius_mm)
+grid_size = max(3, int(round((0.9 * fov_mm) / voxel_mm)) + 1)
+if grid_size % 2 == 0:
+    grid_size += 1
+
+phantom = create_concentric_cylinder_phantom(
+    inner_radius_mm=inner_radius_mm,
+    outer_radius_mm=outer_radius_mm,
+    fov_mm=fov_mm,
+    grid_size=grid_size,
+    inner_pd=inner_pd,
+    inner_t1_ms=inner_t1_ms,
+    inner_t2_ms=inner_t2_ms,
+    outer_pd=outer_pd,
+    outer_t1_ms=outer_t1_ms,
+    outer_t2_ms=outer_t2_ms,
+)
+
+axis = np.linspace(-0.45 * fov_mm, 0.45 * fov_mm, grid_size, dtype=np.float32)
+spacing_xy = float(axis[1] - axis[0]) if grid_size > 1 else float(voxel_mm)
+z_count = max(1, int(round(height_mm / spacing_xy)) + 1)
+if z_count % 2 == 0:
+    z_count += 1
+z_spacing = float(height_mm / max(z_count - 1, 1)) if z_count > 1 else float(voxel_mm)
+
+shape = (z_count, grid_size, grid_size)  # SimpleITK array order: z, y, x
+rho = np.zeros(shape, dtype=np.float32)
+t1 = np.zeros(shape, dtype=np.float32)
+t2 = np.zeros(shape, dtype=np.float32)
+
+xs = np.asarray(phantom["x"], dtype=np.float32) * 1000.0
+ys = np.asarray(phantom["y"], dtype=np.float32) * 1000.0
+rhos = np.asarray(phantom["rho"], dtype=np.float32)
+t1_ms = np.asarray(phantom["t1"], dtype=np.float32) * 1000.0
+t2_ms = np.asarray(phantom["t2"], dtype=np.float32) * 1000.0
+ix = np.clip(np.rint((xs - axis[0]) / spacing_xy).astype(int), 0, grid_size - 1)
+iy = np.clip(np.rint((ys - axis[0]) / spacing_xy).astype(int), 0, grid_size - 1)
+rho[:, iy, ix] = rhos
+t1[:, iy, ix] = t1_ms
+t2[:, iy, ix] = t2_ms
+
+out_dir.mkdir(parents=True, exist_ok=True)
+origin = (float(axis[0]), float(axis[0]), -0.5 * float(height_mm))
+spacing = (spacing_xy, spacing_xy, z_spacing)
+for name, array in (("rho", rho), ("t1", t1), ("t2", t2)):
+    image = sitk.GetImageFromArray(array)
+    image.SetSpacing(spacing)
+    image.SetOrigin(origin)
+    sitk.WriteImage(image, str(out_dir / f"{name}.nii"))
+
+print(f"  packaged phantom written to {out_dir} shape={shape} spacing={spacing}")
+PYEOF
     ok "Phantom written to ${PHANTOM_DIR}"
 fi
 

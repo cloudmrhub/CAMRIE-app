@@ -62,7 +62,7 @@ from pynico_eros_montin import pynico as pn
 from pyable_eros_montin import imaginable as ima
 from cmtools import cmaws as ca
 
-import MRI_pipeline as pipeline
+from camrie_tools import MRI_pipeline as pipeline
 
 
 # ---------------------------------------------------------------------------
@@ -590,7 +590,7 @@ def add_sequence_outputs(out, out_dir, job, multi_sequence, aux_dir):
                 None if not multi_sequence else f"{slug}_{png.name}",
             )
 
-    # camrie-tools-v1 writes previews directly into the sequence output
+    # camrie-tools writes previews directly into the sequence output
     # directory. Keep accepting the established previews/ layout as well.
     for png in sorted(out_path.glob("recon_*.png")):
         add_auxiliary_file(
@@ -737,7 +737,7 @@ def do_process(event, context=None, s3=None):
         manifest = {
             "schema": "camrie.multi_sequence.v1",
             "pipeline": pipelineid,
-            "makeitkoma_sha": os.getenv("MAKEITKOMA_SHA", "unknown"),
+            "camrie_tools_ref": os.getenv("CAMRIE_TOOLS_REF", "unknown"),
             "sequence_count": len(sequence_results),
             "bodymodel_source": tissue["source"],
             "bodymodel": {

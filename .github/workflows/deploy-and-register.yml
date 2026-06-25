@@ -35,8 +35,7 @@ env:
   CLOUDMR_BRAIN_STACK: cloudmrhub-brain
   FARGATE_REPO: camrie-fargate
   APP_NAME: CAMRIE
-  MAKEITKOMA_REPO: cloudmrhub/makeitKOMA
-  MAKEITKOMA_REF: 0ce7bb53286cb04b30bc65bf2b113b34bb97c140
+  CAMRIE_TOOLS_REF: v1
 
 permissions:
   id-token: write
@@ -54,19 +53,6 @@ jobs:
     steps:
       - name: Checkout CAMRIE-app
         uses: actions/checkout@v4
-
-      - name: Checkout makeitKOMA
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.MAKEITKOMA_REPO }}
-          ref: ${{ env.MAKEITKOMA_REF }}
-          path: _makeitkoma
-
-      - name: Copy pipeline files into build context
-        run: |
-          cp _makeitkoma/src/MRI_pipeline.py calculation/src/MRI_pipeline.py
-          # camrie-tools-v1 invokes simulate_batch.jl directly.
-          cp _makeitkoma/src/simulate_batch.jl calculation/src/simulate_batch.jl
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -86,7 +72,7 @@ jobs:
           set -euo pipefail
           cd calculation/src
           FARGATE_URI="${ECR_REGISTRY}/${FARGATE_REPO}"
-          docker build --provenance=false --build-arg MAKEITKOMA_SHA="${MAKEITKOMA_REF}" -f DockerfileFargate -t ${FARGATE_REPO}:${IMAGE_TAG} .
+          docker build --provenance=false --build-arg CAMRIE_TOOLS_REF="${CAMRIE_TOOLS_REF}" -f DockerfileFargate -t ${FARGATE_REPO}:${IMAGE_TAG} .
           docker tag ${FARGATE_REPO}:${IMAGE_TAG} ${FARGATE_URI}:${IMAGE_TAG}
           docker tag ${FARGATE_REPO}:${IMAGE_TAG} ${FARGATE_URI}:latest
           docker push ${FARGATE_URI}:${IMAGE_TAG}

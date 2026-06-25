@@ -25,10 +25,14 @@ ENV JULIA_DEPOT_PATH=/opt/julia-depot
 ENV JULIA_CPU_TARGET=generic
 ENV JULIA_NUM_PRECOMPILE_TASKS=8
 ENV JULIA_PKG_DISABLE_PKGIMAGES=true
+ENV CAMRIE_JULIA_PROJECT=/opt/camrie-julia
+ENV JULIA_PROJECT=/opt/camrie-julia
+ARG CAMRIE_TOOLS_REF=v1
 
 # -- Julia packages and sysimage ---------------------------------------------
-COPY install_julia_deps.jl /tmp/install_julia_deps.jl
-RUN julia /tmp/install_julia_deps.jl
+RUN pip install --upgrade pip \
+ && pip install "camrie-tools @ git+https://github.com/cloudmrhub/camrie-tools.git@${CAMRIE_TOOLS_REF}" \
+ && camrie-install-julia --cpu --update --project-dir /opt/camrie-julia --install-dir /opt/julia-depot
 
 RUN julia -e 'import Pkg; Pkg.add("PackageCompiler"); Pkg.precompile()'
 COPY precompile_workload.jl /tmp/precompile_workload.jl
@@ -48,13 +52,16 @@ RUN apt-get update \
 
 COPY --from=julia-builder /opt/julia /opt/julia
 COPY --from=julia-builder /opt/julia-depot /opt/julia-depot
+COPY --from=julia-builder /opt/camrie-julia /opt/camrie-julia
 
 ENV JULIA_DEPOT_PATH=/opt/julia-depot
 ENV JULIA_CPU_TARGET=generic
 ENV JULIA_PKG_DISABLE_PKGIMAGES=true
 ENV CAMRIE_JULIA_SYSIMAGE=/opt/julia-depot/komamri-sysimage.so
-ARG MAKEITKOMA_SHA=unknown
-ENV MAKEITKOMA_SHA=${MAKEITKOMA_SHA}
+ENV CAMRIE_JULIA_PROJECT=/opt/camrie-julia
+ENV JULIA_PROJECT=/opt/camrie-julia
+ARG CAMRIE_TOOLS_REF=v1
+ENV CAMRIE_TOOLS_REF=${CAMRIE_TOOLS_REF}
 ENV PATH=/usr/local/bin:/opt/julia/bin:$PATH
 
 # Production code invokes "julia" directly. Keep that interface and inject the
@@ -68,7 +75,8 @@ RUN printf '%s\n' \
 
 COPY requirements.txt .
 RUN pip install --upgrade pip \
- && pip install -r requirements.txt
+ && pip install -r requirements.txt \
+ && pip install "camrie-tools @ git+https://github.com/cloudmrhub/camrie-tools.git@${CAMRIE_TOOLS_REF}"
 
 COPY . .
 

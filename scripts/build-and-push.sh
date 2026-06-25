@@ -14,6 +14,7 @@ REGION="us-east-1"
 PROFILE="nyu"
 TAG="latest"
 REPO_NAME="camrie-fargate"
+CAMRIE_TOOLS_REF="${CAMRIE_TOOLS_REF:-v1}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -35,12 +36,9 @@ echo "==> Building Fargate image …"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DOCKER_CONTEXT="${SCRIPT_DIR}/../calculation/src"
 
-# Copy the MRI pipeline and Julia batch script from makeitKOMA into the build context
-MAKEITKOMA_DIR="${MAKEITKOMA_DIR:-/data/PROJECTS/makeitKOMA}"
-cp "${MAKEITKOMA_DIR}/src/MRI_pipeline.py"      "${DOCKER_CONTEXT}/MRI_pipeline.py"
-cp "${MAKEITKOMA_DIR}/src/simulate_batch.jl"  "${DOCKER_CONTEXT}/simulate_batch.jl"
 
 docker build \
+  --build-arg CAMRIE_TOOLS_REF="${CAMRIE_TOOLS_REF}" \
   -f "${DOCKER_CONTEXT}/DockerfileFargate" \
   -t "${ECR_URI}" \
   "${DOCKER_CONTEXT}"
