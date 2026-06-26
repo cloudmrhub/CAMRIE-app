@@ -100,20 +100,13 @@ CPU sysimage: /opt/julia-depot/komamri-sysimage.so
 GPU sysimage: /opt/julia-depot/komamri-gpu-sysimage.so
 ```
 
-The container keeps the production command as `julia`, but the image wraps it so
-every runtime Julia process starts with the dedicated Julia project and the
-sysimage:
+The container keeps the production command as `julia`, but the image wraps it so every runtime Julia process starts with the dedicated Julia project and disables Julia package images:
 
 ```text
-/opt/julia/bin/julia --project=/opt/camrie-julia --pkgimages=no --sysimage=<sysimage> --sysimage-native-code=no
+/opt/julia/bin/julia --project=/opt/camrie-julia --pkgimages=no
 ```
 
-`--pkgimages=no` and `--sysimage-native-code=no` are intentional. GitHub Actions may build the image on
-a different CPU generation than AWS Fargate or the GPU EC2 instance. Disabling package images and native sysimage code lets Julia load the sysimage contents without trying to execute runner-specific cached machine code. The sysimage still includes the direct Julia
-packages installed by `camrie-tools` (`KomaInterface` and, for GPU, `CUDA`) and
-lets PackageCompiler include transitive dependencies. For diagnosis, set
-`CAMRIE_DISABLE_JULIA_SYSIMAGE=1` in a direct Batch container override to run with
-`/opt/camrie-julia` but without the sysimage.
+This is intentional for AWS Batch. GitHub Actions may build the image on a different CPU generation than AWS Fargate or the GPU EC2 instance, and Julia cached native-code images can then fail with `Unable to find compatible target in cached code image`. The Docker build still creates a PackageCompiler sysimage for controlled experiments, but production does not use it by default. To opt into the sysimage path, set `CAMRIE_ENABLE_JULIA_SYSIMAGE=1`; keep `CAMRIE_DISABLE_JULIA_SYSIMAGE=1` as an override to force the portable path.
 
 ---
 
@@ -705,7 +698,7 @@ Target 0 (znver3): Rejecting this target due to use of runtime-disabled features
 ```
 
 then Julia cached code images contain native code for the build runner CPU instead of the AWS runtime CPU. Rebuild the images after confirming the Docker `julia`
-wrapper includes `--pkgimages=no --sysimage-native-code=no`. Do not add `cpu_target="generic"`
+wrapper defaults to `/opt/julia/bin/julia --project=/opt/camrie-julia --pkgimages=no` and does not load the custom sysimage. Do not add `cpu_target="generic"`
 to `PackageCompiler.create_sysimage` unless you have verified the full image
 build still completes; in practice this can make the sysimage build much heavier
 on GitHub-hosted runners.
