@@ -36,7 +36,7 @@ RUN python3 -m pip install --upgrade pip \
 
 RUN julia -e 'import Pkg; Pkg.add("PackageCompiler"); Pkg.precompile()'
 COPY precompile_workload_gpu.jl /tmp/precompile_workload_gpu.jl
-RUN julia -e 'using PackageCompiler; create_sysimage([:KomaInterface, :CUDA]; sysimage_path="/opt/julia-depot/komamri-gpu-sysimage.so", precompile_execution_file="/tmp/precompile_workload_gpu.jl", include_transitive_dependencies=true)'
+RUN julia -e 'using PackageCompiler; create_sysimage([:KomaInterface, :CUDA]; sysimage_path="/opt/julia-depot/komamri-gpu-sysimage.so", precompile_execution_file="/tmp/precompile_workload_gpu.jl", include_transitive_dependencies=true, cpu_target="generic")'
 
 # ==============================================================================
 #  Final runtime image
@@ -75,7 +75,10 @@ ENV PATH=/usr/local/bin:/opt/julia/bin:$PATH
 
 RUN printf '%s\n' \
       '#!/bin/sh' \
-      'exec /opt/julia/bin/julia --sysimage=/opt/julia-depot/komamri-gpu-sysimage.so "$@"' \
+      'if [ "${CAMRIE_DISABLE_JULIA_SYSIMAGE:-0}" = "1" ]; then' \
+      '  exec /opt/julia/bin/julia --project=/opt/camrie-julia "$@"' \
+      'fi' \
+      'exec /opt/julia/bin/julia --project=/opt/camrie-julia --sysimage=/opt/julia-depot/komamri-gpu-sysimage.so "$@"' \
       > /usr/local/bin/julia \
  && chmod +x /usr/local/bin/julia \
  && ln -s /usr/local/bin/julia /usr/local/bin/julia-fast
@@ -87,7 +90,7 @@ RUN python3 -m pip install --upgrade pip \
 
 COPY . .
 
-RUN julia -e 'using KomaInterface, CUDA; println("GPU sysimage OK")'
+RUN julia -e 'using KomaInterface, CUDA; println("GPU Julia project: ", Base.active_project()); println("GPU sysimage OK")'
 
 RUN mkdir -p /tmp/.matplotlib /tmp/.fontconfig && chmod 777 /tmp/.matplotlib /tmp/.fontconfig
 ENV MPLCONFIGDIR=/tmp/.matplotlib

@@ -6,7 +6,7 @@ Uploads local phantom files (rho, t1, t2) and a pulse sequence,
 then submits a queue_job request and polls until completion.
 
 Usage:
-python scripts/run_cloud_test.py --token $TOKEN --seq-file data/sequences/PD-Weighted_Spin_Echo.seq  --b0 1.5 --num-slice 1 --spin-factor 1
+python scripts/run_cloud_test.py --token $CLOUDMR_TOKEN --seq-file data/sequences/PD-Weighted_Spin_Echo.seq --phantom-dir calculation/phantom --b0 1.5 --num-slices 1 --spin-factor 1
 """
 
 import argparse

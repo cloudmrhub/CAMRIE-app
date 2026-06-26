@@ -61,20 +61,58 @@ camrie-app-prod  (root template.yaml)
 GPU Batch resources are gated by the `GpuEnabled` condition. If `GpuImageUri`
 is empty, CPU Batch still deploys and GPU routing falls back to CPU.
 
-### Julia sysimage / CUDA PTX
+### `camrie-tools` package and Julia runtime
 
-Both images bake Julia packages and a KomaMRI sysimage at Docker build time:
+CAMRIE-app depends on the installable package:
 
+```text
+camrie-tools @ git+https://github.com/cloudmrhub/camrie-tools.git@v1
 ```
+
+The package owns the MRI pipeline Python code, bundled `simulate_batch.jl`, the
+Julia dependency installer, and the package smoke phantom. CAMRIE-app owns the
+AWS Batch/Lambda/Docker wrapper.
+
+Both Docker images install `camrie-tools@v1` and then run the package installer
+inside a dedicated Julia project:
+
+```text
+CAMRIE Julia project: /opt/camrie-julia
+Julia depot:          /opt/julia-depot
+```
+
+CPU image:
+
+```bash
+camrie-install-julia --cpu --update --project-dir /opt/camrie-julia --install-dir /opt/julia-depot
+```
+
+GPU image:
+
+```bash
+camrie-install-julia --update --project-dir /opt/camrie-julia --install-dir /opt/julia-depot
+```
+
+Both images bake a Julia sysimage at Docker build time:
+
+```text
 CPU sysimage: /opt/julia-depot/komamri-sysimage.so
 GPU sysimage: /opt/julia-depot/komamri-gpu-sysimage.so
 ```
 
 The container keeps the production command as `julia`, but the image wraps it so
-every runtime Julia process starts with the sysimage. If the GPU image is built
-on a runner with an NVIDIA GPU, `precompile_workload_gpu.jl` also exercises the
-CUDA simulation path during build; otherwise the GPU packages are still compiled
-into the sysimage and CUDA PTX is generated on first GPU execution.
+every runtime Julia process starts with the dedicated Julia project and the
+sysimage:
+
+```text
+/opt/julia/bin/julia --project=/opt/camrie-julia --sysimage=<sysimage>
+```
+
+The sysimage includes the direct Julia packages installed by `camrie-tools`
+(`KomaInterface` and, for GPU, `CUDA`) and lets PackageCompiler include
+transitive dependencies. For diagnosis, set `CAMRIE_DISABLE_JULIA_SYSIMAGE=1` in
+a direct Batch container override to run with `/opt/camrie-julia` but without the
+sysimage.
 
 ---
 
@@ -121,17 +159,11 @@ Secrets set:
 | `CLOUDMR_ADMIN_PASSWORD` | Admin login password |
 | `CLOUDMR_ADMIN_TOKEN` | Pre-issued JWT (optional fallback) |
 
-### 1c. Add GitHub PAT for private makeitKOMA repo
+### 1c. Package source
 
-1. Create a fine-grained PAT at https://github.com/settings/personal-access-tokens/new
-   - Resource owner: `cloudmrhub`
-   - Repository: only `cloudmrhub/makeitKOMA`
-   - Permission: **Contents → Read-only**
-
-2. Store it:
-   ```bash
-   gh secret set GH_PAT --repo cloudmrhub/CAMRIE-app
-   ```
+The Docker builds install `cloudmrhub/camrie-tools@v1` directly over HTTPS.
+No extra GitHub PAT is required for the package as long as the repository stays
+public/readable to GitHub Actions.
 
 ### 1d. Create OIDC trust for GitHub Actions
 
@@ -149,21 +181,30 @@ Grants the `AWS_DEPLOY_ROLE_ARN` role the permissions needed to deploy the SAM s
 
 Two workflows run automatically on push to `main`:
 
-#### `build-images.yml` — Triggered when `calculation/src/**` changes
+#### `build-images.yml` — Triggered when `calculation/src/**` or the workflow changes
 
-1. Checks out `cloudmrhub/makeitKOMA@camrie-tools-v1`
-2. Copies `MRI_pipeline_dev.py` and `simulate_batch_final.jl` into the build context
-3. Builds **CPU image** from `DockerfileFargate` → pushes `camrie-fargate:latest` + `camrie-fargate:<sha>`
-4. Builds **GPU image** from `DockerfileGpu` → pushes `camrie-fargate:gpu-latest` + `camrie-fargate:gpu-<sha>`
+1. Checks out CAMRIE-app.
+2. Builds the **CPU image** from `DockerfileFargate` and installs `camrie-tools@${CAMRIE_TOOLS_REF}`.
+3. Builds the **GPU image** from `DockerfileGpu` and installs `camrie-tools@${CAMRIE_TOOLS_REF}`.
+4. Pushes `camrie-fargate:latest`, `camrie-fargate:<sha>`, `camrie-fargate:gpu-latest`, and `camrie-fargate:gpu-<sha>`.
+
+The default package ref is:
+
+```yaml
+CAMRIE_TOOLS_REF: v1
+```
 
 Key environment variables baked into the images:
 
 | Variable | CPU image | GPU image |
 |---|---|---|
-| `JULIA_CPU_TARGET` | `generic` | `generic` |
-| `JULIA_PKG_DISABLE_PKGIMAGES` | `true` | *(not set — allows precompilation cache)* |
+| `CAMRIE_TOOLS_REF` | `v1` by default | `v1` by default |
+| `CAMRIE_JULIA_PROJECT` | `/opt/camrie-julia` | `/opt/camrie-julia` |
+| `JULIA_PROJECT` | `/opt/camrie-julia` | `/opt/camrie-julia` |
 | `JULIA_DEPOT_PATH` | `/opt/julia-depot` | `/opt/julia-depot` |
-| Base image | `python:3.11-slim` + Julia 1.11.4 | `nvidia/cuda:12.6.3-runtime-ubuntu22.04` + Julia 1.11.4 |
+| `JULIA_CPU_TARGET` | `generic` | `generic` |
+| `JULIA_PKG_DISABLE_PKGIMAGES` | `true` | *(not set)* |
+| Base image | `python:3.11-slim` + Julia 1.12.6 | `nvidia/cuda:12.6.3-runtime-ubuntu22.04` + Julia 1.12.6 |
 
 #### `deploy-and-register.yml` — Triggered after build completes (or on template changes)
 
@@ -287,35 +328,69 @@ AWS_PAGER="" aws ec2 describe-instances \
 
 ## Step 4 – Run a Test
 
+Use `scripts/run_cloud_test.py` to submit one small CPU job and one small GPU
+job through the CloudMR Brain API. The script uploads `calculation/phantom`
+(`rho.nii`, `t1.nii`, `t2.nii`) and the selected sequence, queues a job, and
+polls until completion.
+
+Set a token first.
+
+PowerShell:
+
+```powershell
+$env:CLOUDMR_TOKEN = "PASTE_TOKEN_HERE"
+```
+
+Bash/WSL:
+
+```bash
+export CLOUDMR_TOKEN='PASTE_TOKEN_HERE'
+```
+
 ### CPU test (Fargate)
 
-```bash
-python scripts/run_cloud_test.py \
-  --token $TOKEN \
-  --seq-file /path/to/sequence.seq \
-  --phantom-dir calculation/phantom \
-  --b0 1.5 --num-slices 4 --spin-factor 4 \
-  --tail-logs
+```powershell
+conda run -n koma python scripts/run_cloud_test.py `
+  --token "$env:CLOUDMR_TOKEN" `
+  --seq-file data/sequences/PD-Weighted_Spin_Echo.seq `
+  --phantom-dir calculation/phantom `
+  --alias "CAMRIE CPU package test" `
+  --num-slices 1 `
+  --spin-factor 1 `
+  --spins-per-voxel 0 `
+  --parallel-slices 1 `
+  --n-threads 1 `
+  --timeout 1800
 ```
 
-Expected cold-start: ~10 s. Logs appear immediately after the container starts.
+Expected cold-start: image pull + app startup, usually much faster than the GPU
+first run.
 
-### GPU test (g4dn.xlarge)
+### GPU test (EC2 Spot GPU)
 
-```bash
-python scripts/run_cloud_test.py \
-  --token $TOKEN \
-  --seq-file /path/to/sequence.seq \
-  --phantom-dir calculation/phantom \
-  --b0 1.5 --num-slices 4 --spin-factor 16 \
-  --tail-logs --use-gpu --timeout 2400
+```powershell
+conda run -n koma python scripts/run_cloud_test.py `
+  --token "$env:CLOUDMR_TOKEN" `
+  --seq-file data/sequences/PD-Weighted_Spin_Echo.seq `
+  --phantom-dir calculation/phantom `
+  --alias "CAMRIE GPU package test" `
+  --num-slices 1 `
+  --spin-factor 1 `
+  --spins-per-voxel 1 `
+  --parallel-slices 1 `
+  --n-threads 1 `
+  --use-gpu `
+  --timeout 3600
 ```
 
-Expected timeline on **first task on a fresh instance**:
-- 0–90 s: EC2 instance provisions + image pull → ECS status `RUNNING`
-- 90 s – ~10 min: CUDA PTX JIT (Julia package load is fast ~30 s; only PTX is slow)
-- ~10 min: First log line appears, simulation begins
-- **Second task on same warm instance**: logs appear in ~30 s (PTX cache hit)
+Expected timeline on a fresh GPU instance:
+
+- EC2 Spot instance launch and image pull
+- Julia package/sysimage startup
+- CUDA runtime/PTX/JIT warmup on first execution
+- Koma simulation and result upload
+
+A second GPU task on a warm instance should start faster.
 
 ---
 
@@ -534,13 +609,21 @@ AWS_PAGER="" aws logs describe-log-streams \
 
 ## Maintenance & Operational Runbook
 
-### Update pipeline code (MRI_pipeline.py / simulate_batch_final.jl)
+### Update pipeline code (`camrie-tools`)
 
-Both files are sourced from `cloudmrhub/makeitKOMA@camrie-tools-v1` at build time:
+Pipeline code, the bundled Julia batch script, the Julia installer, and the
+package smoke phantom live in `cloudmrhub/camrie-tools`. CAMRIE images install
+that package from the ref configured in `.github/workflows/build-images.yml`:
+
+```yaml
+CAMRIE_TOOLS_REF: v1
+```
+
+After changing `camrie-tools`, push the change to `v1` or update
+`CAMRIE_TOOLS_REF` to a tag/SHA, then rebuild CAMRIE images:
 
 ```bash
-# After committing changes in makeitKOMA@camrie-tools-v1, trigger a rebuild:
-git commit --allow-empty -m "Rebuild: pull latest makeitKOMA pipeline"
+git commit --allow-empty -m "Rebuild: pull latest camrie-tools package"
 git push origin main
 ```
 
@@ -581,12 +664,16 @@ git push origin main
 
 Two workflow runs triggered simultaneously (one from `workflow_run` after a build, one from a direct template-changing push) can collide. The `concurrency` group in `deploy-and-register.yml` queues them. If you still see it, re-run the failed workflow from the GitHub Actions UI — the stack will be in `UPDATE_COMPLETE` by then.
 
-### CI: Build fails — "repository not found" for makeitKOMA
+### CI: Build fails while installing `camrie-tools`
 
-`GH_PAT` expired. Create a new PAT and update:
+The Docker build installs the package with:
+
 ```bash
-gh secret set GH_PAT --repo cloudmrhub/CAMRIE-app
+pip install "camrie-tools @ git+https://github.com/cloudmrhub/camrie-tools.git@${CAMRIE_TOOLS_REF}"
 ```
+
+Check that `CAMRIE_TOOLS_REF` exists on `cloudmrhub/camrie-tools` and that the
+repository is readable by GitHub Actions.
 
 ### CloudFormation: GpuTaskDefinition CREATE_FAILED
 
@@ -596,6 +683,50 @@ gh secret set GH_PAT --repo cloudmrhub/CAMRIE-app
 | Task-level `Cpu`/`Memory` errors | Must be **strings** at task level; container uses `MemoryReservation` (integer) |
 | `EC2InstanceRole` also fails | Usually caused by `GpuTaskDefinition` failing first (cascade); fix the task def first |
 
+### Cloud job exits during `[Batch Julia]` simulation
+
+If CloudWatch shows a Python traceback ending with `subprocess.CalledProcessError`
+for a command like:
+
+```text
+julia --threads=1 -O3 .../camrie_tools/simulate_batch.jl ...
+```
+
+that traceback is only the Python wrapper reporting that Julia exited with code
+`1`. The root cause is the Julia error printed immediately before the Python
+traceback.
+
+If the line is:
+
+```text
+ERROR: Unable to find compatible target in cached code image.
+Target 0 (znver3): Rejecting this target due to use of runtime-disabled features
+```
+
+then the Julia sysimage was compiled for the build runner CPU instead of a
+portable CPU target. Rebuild the images after confirming both Dockerfiles call
+`PackageCompiler.create_sysimage(..., cpu_target="generic")`.
+
+Pull the surrounding log lines first:
+
+```bash
+aws logs tail /ecs/camrie-Prod \
+  --since 30m \
+  --profile nyu --region us-east-1
+
+aws logs tail /ecs/camrie-gpu-Prod \
+  --since 30m \
+  --profile nyu --region us-east-1
+```
+
+For a specific stream, use the stream prefix printed by the test script or AWS
+Batch job details. Also download the failure bundle printed by the app; it
+contains the sequence, phantom, manifest, and runtime files needed to reproduce
+the failing Julia command locally.
+
+If the error only appears with the sysimage, submit a direct Batch debug job with
+`CAMRIE_DISABLE_JULIA_SYSIMAGE=1`. Keep `--project=/opt/camrie-julia`; disabling
+the project as well would test a different environment.
 ### GPU task terminates silently (no logs, exit code non-zero)
 
 ```bash

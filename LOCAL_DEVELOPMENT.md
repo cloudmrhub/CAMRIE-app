@@ -1,98 +1,153 @@
 # CAMRIE Local Pipeline Development
 
-Use this workflow when you are changing `MRI_pipeline.py` and want to test locally before building Docker images or running cloud jobs.
-
-## Recommended Loop
-
-The fastest loop is:
-
-1. Edit the pipeline code.
-2. Run a small local simulation.
-3. Inspect `calculation/local_out/`.
-4. Repeat.
-
-No AWS resources are used. No Docker image is required. The runner calls `calculation/src/app.py` directly and redirects S3 uploads into `calculation/local_out/`.
-
-## Option A: Edit the CAMRIE Copy Directly
-
-Edit:
+CAMRIE-app is now the local/cloud wrapper around the installable `camrie-tools` package.
+The MRI pipeline, Julia batch entrypoint, Julia installer, and smoke phantom live in:
 
 ```text
-calculation/src/MRI_pipeline.py
+https://github.com/cloudmrhub/camrie-tools/tree/v1
 ```
 
-Then run:
+CAMRIE-app should use that Git version, not a copied local pipeline file. In normal development:
 
-```bash
-cd calculation
-./run_local_test.sh \
-  --seq /data/ARTICLES/bodymodelscreation/tse_ETL1_T1w.seq \
-  --skip-phantom \
-  --num-slices 1 \
-  --spin-factor 1 \
-  --spins-per-voxel 0 \
-  --jobs 1
+- edit/release pipeline code in `cloudmrhub/camrie-tools`
+- install `camrie-tools@v1` into the local `koma` environment
+- run CAMRIE local/cloud tests from this repo
+- rebuild/deploy CAMRIE images, which also install `camrie-tools@v1`
+
+## Local environment setup
+
+From PowerShell:
+
+```powershell
+conda run -n koma python -m pip install --upgrade --force-reinstall `
+  "camrie-tools @ git+https://github.com/cloudmrhub/camrie-tools.git@v1"
 ```
 
-Because each run starts a fresh Python process, changes to `MRI_pipeline.py` are picked up immediately.
+Install/update the dedicated CAMRIE Julia project used by `camrie-tools`.
 
-## Option B: Keep Editing an External Dev File
+CPU-only local development:
 
-If your working copy lives in another repo, for example:
+```powershell
+conda run --no-capture-output -n koma camrie-install-julia --cpu --update
+```
+
+GPU-capable local development:
+
+```powershell
+conda run --no-capture-output -n koma camrie-install-julia --update
+```
+
+Verify the package and Julia project:
+
+```powershell
+conda run --no-capture-output -n koma camrie-test-installation --cpu
+conda run --no-capture-output -n koma camrie-test-installation
+```
+
+The default Julia project is:
 
 ```text
-/data/PROJECTS/makeitKOMA/dev/MRI_pipeline_dev.py
+C:\Users\<you>\.camrie\julia
 ```
 
-run the local test with `--pipeline-src`:
+`calculation/run_local_test.sh` exports this as `JULIA_PROJECT` before running the pipeline.
+
+## Local smoke tests
+
+The local runner uses the installed `camrie-tools` package. It no longer copies `MRI_pipeline.py` or `simulate_batch.jl`, and it no longer calls `calculation/make_phantom.py`. The local NIfTI test phantom is generated from the packaged `camrie_tools._reconstruction_smoke` phantom definition.
+
+Run from Git Bash/PowerShell using Git Bash:
+
+```powershell
+& "$env:LOCALAPPDATA\Programs\Git\usr\bin\bash.exe" -lc 'source /c/Users/montie01/AppData/Local/anaconda3/etc/profile.d/conda.sh; conda activate koma; cd /c/Users/montie01/PROJECTS/CAMRIE-app-1/calculation; source ./run_local_test.sh --event event.json --seq /c/Users/montie01/PROJECTS/CAMRIE-app-1/data/sequences/PD-Weighted_Spin_Echo.seq --num-slices 1 --spin-factor 1 --spins-per-voxel 0 --parallel-slices 1 --jobs 1'
+```
+
+GPU local smoke:
+
+```powershell
+& "$env:LOCALAPPDATA\Programs\Git\usr\bin\bash.exe" -lc 'source /c/Users/montie01/AppData/Local/anaconda3/etc/profile.d/conda.sh; conda activate koma; cd /c/Users/montie01/PROJECTS/CAMRIE-app-1/calculation; source ./run_local_test.sh --event eventGPU.json --seq /c/Users/montie01/PROJECTS/CAMRIE-app-1/data/sequences/PD-Weighted_Spin_Echo.seq --gpu --num-slices 1 --spin-factor 1 --spins-per-voxel 1 --parallel-slices 1 --jobs 1'
+```
+
+Successful local results are written under:
+
+```text
+calculation/local_out/
+```
+
+The runner prints the newest result ZIP at the end.
+
+## Cloud smoke tests
+
+The cloud smoke script uploads:
+
+```text
+calculation/phantom/rho.nii
+calculation/phantom/t1.nii
+calculation/phantom/t2.nii
+```
+
+and the selected sequence, queues a CloudMR Brain job, and polls until completion.
+
+Set a token first. PowerShell:
+
+```powershell
+$env:CLOUDMR_TOKEN = "PASTE_TOKEN_HERE"
+```
+
+CPU cloud task:
+
+```powershell
+conda run -n koma python scripts/run_cloud_test.py `
+  --token "$env:CLOUDMR_TOKEN" `
+  --seq-file data/sequences/PD-Weighted_Spin_Echo.seq `
+  --phantom-dir calculation/phantom `
+  --alias "CAMRIE CPU package test" `
+  --num-slices 1 `
+  --spin-factor 1 `
+  --spins-per-voxel 0 `
+  --parallel-slices 1 `
+  --n-threads 1 `
+  --timeout 1800
+```
+
+GPU cloud task:
+
+```powershell
+conda run -n koma python scripts/run_cloud_test.py `
+  --token "$env:CLOUDMR_TOKEN" `
+  --seq-file data/sequences/PD-Weighted_Spin_Echo.seq `
+  --phantom-dir calculation/phantom `
+  --alias "CAMRIE GPU package test" `
+  --num-slices 1 `
+  --spin-factor 1 `
+  --spins-per-voxel 1 `
+  --parallel-slices 1 `
+  --n-threads 1 `
+  --use-gpu `
+  --timeout 3600
+```
+
+In WSL/Git Bash, use the same flags with Unix line continuations:
 
 ```bash
-cd calculation
-./run_local_test.sh \
-  --pipeline-src /data/PROJECTS/makeitKOMA/dev/MRI_pipeline_dev.py \
-  --seq /data/ARTICLES/bodymodelscreation/tse_ETL1_T1w.seq \
-  --skip-phantom \
+export CLOUDMR_TOKEN='PASTE_TOKEN_HERE'
+
+python scripts/run_cloud_test.py \
+  --token "$CLOUDMR_TOKEN" \
+  --seq-file data/sequences/PD-Weighted_Spin_Echo.seq \
+  --phantom-dir calculation/phantom \
+  --alias "CAMRIE CPU package test" \
   --num-slices 1 \
   --spin-factor 1 \
   --spins-per-voxel 0 \
-  --jobs 1
+  --parallel-slices 1 \
+  --n-threads 1 \
+  --timeout 1800
 ```
 
-You can also set the source once for your shell:
+Add `--use-gpu --spins-per-voxel 1 --timeout 3600` for the GPU task.
 
-```bash
-export CAMRIE_PIPELINE_SRC=/data/PROJECTS/makeitKOMA/dev/MRI_pipeline_dev.py
-
-cd calculation
-./run_local_test.sh \
-  --seq /data/ARTICLES/bodymodelscreation/tse_ETL1_T1w.seq \
-  --skip-phantom \
-  --num-slices 1 \
-  --spin-factor 1 \
-  --spins-per-voxel 0 \
-  --jobs 1
-```
-
-`--pipeline-src` copies the external file into `calculation/src/MRI_pipeline.py` before running the test.
-
-## Better Fidelity Test
-
-After the smoke test passes, run something closer to the cloud shape:
-
-```bash
-cd calculation
-./run_local_test.sh \
-  --seq /data/ARTICLES/bodymodelscreation/tse_ETL1_T1w.seq \
-  --skip-phantom \
-  --b0 1.5 \
-  --num-slices 4 \
-  --spin-factor 16 \
-  --jobs 4
-```
-
-This is still local, but it is closer to the CPU Batch job configuration.
-
-## Frontend Task JSON
+## Frontend task JSON
 
 The calculation app also accepts the frontend-style payload:
 
@@ -111,49 +166,7 @@ conda run --no-capture-output -n koma python -u src/local_test.py task.json \
 
 This downloads bodymodel/sequences from S3 but still writes result and failure ZIPs to `calculation/local_out/`.
 
-For a fully offline local run, point the bodymodel and sequence file descriptors at local files, then run without `--aws-profile`:
-
-```bash
-cd calculation
-conda run --no-capture-output -n koma python -u src/local_test.py task.json
-```
-
-To quickly check only the adapter/normalization layer without launching a simulation:
-
-```bash
-cd calculation/src
-conda run --no-capture-output -n koma python -c 'import json, app; ev=json.load(open("../task.json")); jobs=app.normalize_sequence_jobs(ev["task"]["options"]); print(len(jobs), [j["name"] for j in jobs])'
-```
-
-In the cloud path, the router Lambda passes the original frontend JSON to Batch. The Batch container downloads the bodymodel ZIP, extracts it, reads `info.json`, resolves `rho`/`pd`, `t1`, and `t2`, then runs each sequence and writes one final result ZIP.
-
-## Local GPU Test
-
-Only use this if the local machine has CUDA available in the `koma` environment:
-
-```bash
-cd calculation
-./run_local_test.sh \
-  --seq /data/ARTICLES/bodymodelscreation/tse_ETL1_T1w.seq \
-  --skip-phantom \
-  --num-slices 1 \
-  --spin-factor 1 \
-  --gpu
-```
-
-The cloud GPU path still needs to be validated with `scripts/run_cloud_test.py --use-gpu`, because local CUDA and AWS Batch GPU instances are not identical.
-
-## Outputs
-
-Successful local results are written under:
-
-```text
-calculation/local_out/
-```
-
-The runner prints the newest result ZIP and its contents at the end.
-
-## Common Issues
+## Common issues
 
 If `koma` is missing:
 
@@ -161,14 +174,11 @@ If `koma` is missing:
 'koma' conda environment not found. Create it first.
 ```
 
-The local runner expects your existing KomaMRI development environment to be available as a conda env named `koma`.
+If `run_local_test.sh` says `camrie-tools` is not installed from `cloudmrhub/camrie-tools@v1`, reinstall it:
 
-If a file tries to download from S3 in local mode, check `calculation/event.json`. The input descriptors should use:
-
-```json
-"type": "local"
+```powershell
+conda run -n koma python -m pip install --upgrade --force-reinstall `
+  "camrie-tools @ git+https://github.com/cloudmrhub/camrie-tools.git@v1"
 ```
 
-with a valid `local_path`.
-
-
+If the GPU cloud task appears slow, remember the first run on a fresh EC2 GPU instance may include instance launch, image pull, Julia cache warmup, and CUDA PTX/JIT startup.

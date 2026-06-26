@@ -36,7 +36,7 @@ RUN pip install --upgrade pip \
 
 RUN julia -e 'import Pkg; Pkg.add("PackageCompiler"); Pkg.precompile()'
 COPY precompile_workload.jl /tmp/precompile_workload.jl
-RUN julia -e 'using PackageCompiler; create_sysimage([:KomaInterface]; sysimage_path="/opt/julia-depot/komamri-sysimage.so", precompile_execution_file="/tmp/precompile_workload.jl", include_transitive_dependencies=true)'
+RUN julia -e 'using PackageCompiler; create_sysimage([:KomaInterface]; sysimage_path="/opt/julia-depot/komamri-sysimage.so", precompile_execution_file="/tmp/precompile_workload.jl", include_transitive_dependencies=true, cpu_target="generic")'
 
 # ==============================================================================
 #  Final runtime image
@@ -68,7 +68,10 @@ ENV PATH=/usr/local/bin:/opt/julia/bin:$PATH
 # sysimage here so every runtime Julia process benefits automatically.
 RUN printf '%s\n' \
       '#!/bin/sh' \
-      'exec /opt/julia/bin/julia --sysimage=/opt/julia-depot/komamri-sysimage.so "$@"' \
+      'if [ "${CAMRIE_DISABLE_JULIA_SYSIMAGE:-0}" = "1" ]; then' \
+      '  exec /opt/julia/bin/julia --project=/opt/camrie-julia "$@"' \
+      'fi' \
+      'exec /opt/julia/bin/julia --project=/opt/camrie-julia --sysimage=/opt/julia-depot/komamri-sysimage.so "$@"' \
       > /usr/local/bin/julia \
  && chmod +x /usr/local/bin/julia \
  && ln -s /usr/local/bin/julia /usr/local/bin/julia-fast
@@ -80,7 +83,7 @@ RUN pip install --upgrade pip \
 
 COPY . .
 
-RUN julia -e 'using KomaInterface; println("CPU sysimage OK")'
+RUN julia -e 'using KomaInterface; println("CPU Julia project: ", Base.active_project()); println("CPU sysimage OK")'
 
 RUN mkdir -p /tmp/.matplotlib /tmp/.fontconfig && chmod 777 /tmp/.matplotlib /tmp/.fontconfig
 ENV MPLCONFIGDIR=/tmp/.matplotlib
