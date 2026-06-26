@@ -36,7 +36,7 @@ RUN pip install --upgrade pip \
 
 RUN julia -e 'import Pkg; Pkg.add("PackageCompiler"); Pkg.precompile()'
 COPY precompile_workload.jl /tmp/precompile_workload.jl
-RUN julia -e 'using PackageCompiler; create_sysimage([:KomaInterface]; sysimage_path="/opt/julia-depot/komamri-sysimage.so", precompile_execution_file="/tmp/precompile_workload.jl", include_transitive_dependencies=true, cpu_target="generic")'
+RUN julia -e 'using PackageCompiler; create_sysimage([:KomaInterface]; sysimage_path="/opt/julia-depot/komamri-sysimage.so", precompile_execution_file="/tmp/precompile_workload.jl", include_transitive_dependencies=true)'
 
 # ==============================================================================
 #  Final runtime image
@@ -71,7 +71,7 @@ RUN printf '%s\n' \
       'if [ "${CAMRIE_DISABLE_JULIA_SYSIMAGE:-0}" = "1" ]; then' \
       '  exec /opt/julia/bin/julia --project=/opt/camrie-julia "$@"' \
       'fi' \
-      'exec /opt/julia/bin/julia --project=/opt/camrie-julia --sysimage=/opt/julia-depot/komamri-sysimage.so "$@"' \
+      'exec /opt/julia/bin/julia --project=/opt/camrie-julia --sysimage=/opt/julia-depot/komamri-sysimage.so --sysimage-native-code=no "$@"' \
       > /usr/local/bin/julia \
  && chmod +x /usr/local/bin/julia \
  && ln -s /usr/local/bin/julia /usr/local/bin/julia-fast
