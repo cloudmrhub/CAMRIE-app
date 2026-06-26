@@ -119,8 +119,8 @@ conda run -n koma python scripts/run_cloud_test.py `
   --phantom-dir calculation/phantom `
   --alias "CAMRIE GPU package test" `
   --num-slices 1 `
-  --spin-factor 1 `
-  --spins-per-voxel 1 `
+  --spin-factor 4 `
+  --spins-per-voxel 0 `
   --parallel-slices 1 `
   --n-threads 1 `
   --use-gpu `
@@ -145,7 +145,7 @@ python scripts/run_cloud_test.py \
   --timeout 1800
 ```
 
-Add `--use-gpu --spins-per-voxel 1 --timeout 3600` for the GPU task.
+For a real GPU cloud task, add `--use-gpu --spin-factor 4 --spins-per-voxel 0 --timeout 3600`; the higher spin factor crosses the default forced-GPU routing threshold.
 
 ## Frontend task JSON
 

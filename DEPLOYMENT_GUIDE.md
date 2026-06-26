@@ -105,13 +105,11 @@ every runtime Julia process starts with the dedicated Julia project and the
 sysimage:
 
 ```text
-/opt/julia/bin/julia --project=/opt/camrie-julia --sysimage=<sysimage> --sysimage-native-code=no
+/opt/julia/bin/julia --project=/opt/camrie-julia --pkgimages=no --sysimage=<sysimage> --sysimage-native-code=no
 ```
 
-`--sysimage-native-code=no` is intentional. GitHub Actions may build the image on
-a different CPU generation than AWS Fargate or the GPU EC2 instance. Disabling
-native-code reuse lets Julia load the sysimage contents without trying to execute
-runner-specific cached machine code. The sysimage still includes the direct Julia
+`--pkgimages=no` and `--sysimage-native-code=no` are intentional. GitHub Actions may build the image on
+a different CPU generation than AWS Fargate or the GPU EC2 instance. Disabling package images and native sysimage code lets Julia load the sysimage contents without trying to execute runner-specific cached machine code. The sysimage still includes the direct Julia
 packages installed by `camrie-tools` (`KomaInterface` and, for GPU, `CUDA`) and
 lets PackageCompiler include transitive dependencies. For diagnosis, set
 `CAMRIE_DISABLE_JULIA_SYSIMAGE=1` in a direct Batch container override to run with
@@ -206,7 +204,7 @@ Key environment variables baked into the images:
 | `JULIA_PROJECT` | `/opt/camrie-julia` | `/opt/camrie-julia` |
 | `JULIA_DEPOT_PATH` | `/opt/julia-depot` | `/opt/julia-depot` |
 | `JULIA_CPU_TARGET` | `generic` | `generic` |
-| `JULIA_PKG_DISABLE_PKGIMAGES` | `true` | *(not set)* |
+| Julia package images | disabled at runtime with `--pkgimages=no` | disabled at runtime with `--pkgimages=no` |
 | Base image | `python:3.11-slim` + Julia 1.12.6 | `nvidia/cuda:12.6.3-runtime-ubuntu22.04` + Julia 1.12.6 |
 
 #### `deploy-and-register.yml` — Triggered after build completes (or on template changes)
@@ -378,8 +376,8 @@ conda run -n koma python scripts/run_cloud_test.py `
   --phantom-dir calculation/phantom `
   --alias "CAMRIE GPU package test" `
   --num-slices 1 `
-  --spin-factor 1 `
-  --spins-per-voxel 1 `
+  --spin-factor 4 `
+  --spins-per-voxel 0 `
   --parallel-slices 1 `
   --n-threads 1 `
   --use-gpu `
@@ -706,9 +704,8 @@ ERROR: Unable to find compatible target in cached code image.
 Target 0 (znver3): Rejecting this target due to use of runtime-disabled features
 ```
 
-then the Julia sysimage contains native code for the build runner CPU instead of
-the AWS runtime CPU. Rebuild the images after confirming the Docker `julia`
-wrapper includes `--sysimage-native-code=no`. Do not add `cpu_target="generic"`
+then Julia cached code images contain native code for the build runner CPU instead of the AWS runtime CPU. Rebuild the images after confirming the Docker `julia`
+wrapper includes `--pkgimages=no --sysimage-native-code=no`. Do not add `cpu_target="generic"`
 to `PackageCompiler.create_sysimage` unless you have verified the full image
 build still completes; in practice this can make the sysimage build much heavier
 on GitHub-hosted runners.

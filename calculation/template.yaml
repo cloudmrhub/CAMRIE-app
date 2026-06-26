@@ -392,7 +392,7 @@ Resources:
             - Effect: Allow
               Action: 
                 - batch:SubmitJob
-                - batch:TagResource  
+                - batch:TagResource
               Resource: "*"
             - Effect: Allow
               Action: [iam:PassRole]
@@ -574,10 +574,33 @@ Resources:
                 "cpu-default",
             )
 
+        def force_cpu_simulation(event):
+            # The routing decision is authoritative. If a GPU-requested job is
+            # routed to Fargate because it is too small or GPU Batch is disabled,
+            # do not let the app pass `--gpu` to the Julia simulator inside the
+            # CPU container.
+            cleaned = json.loads(json.dumps(event))
+            task = cleaned.get("task", cleaned) if isinstance(cleaned, dict) else {}
+            opts = task.get("options", {}) if isinstance(task, dict) else {}
+            if isinstance(opts, dict):
+                sim = opts.get("simulation")
+                if isinstance(sim, dict):
+                    sim["use_gpu"] = False
+
+                sequences = opts.get("sequences")
+                if isinstance(sequences, list):
+                    for seq in sequences:
+                        if isinstance(seq, dict):
+                            seq_sim = seq.get("simulation")
+                            if isinstance(seq_sim, dict):
+                                seq_sim["use_gpu"] = False
+            return cleaned
+
         def lambda_handler(event, context):
             estimated_spins = estimate_spins(event)
             compute, queue, definition, reason = choose_compute(event, estimated_spins)
-            payload = event_payload_value(event)
+            payload_event = force_cpu_simulation(event) if compute == "cpu" else event
+            payload = event_payload_value(payload_event)
             job_name = clean_job_name(event)
 
             print(
