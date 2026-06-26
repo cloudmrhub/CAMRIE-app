@@ -408,9 +408,9 @@ Resources:
       Environment:
         Variables:
           CPU_JOB_QUEUE: !Ref CpuJobQueue
-          CPU_JOB_DEFINITION: !Ref CpuJobDefinition
+          CPU_JOB_DEFINITION: !Sub "${AWS::StackName}-cpu-${StageName}"
           GPU_JOB_QUEUE: !If [GpuEnabled, !Ref GpuJobQueue, ""]
-          GPU_JOB_DEFINITION: !If [GpuEnabled, !Ref GpuJobDefinition, ""]
+          GPU_JOB_DEFINITION: !If [GpuEnabled, { Fn::Sub: "${AWS::StackName}-gpu-${StageName}" }, ""]
           DATA_BUCKET: !Ref DataBucketPName
           AUTO_GPU_SPIN_THRESHOLD: !Ref AutoGpuSpinThreshold
           FORCED_GPU_MIN_SPIN_THRESHOLD: !Ref ForcedGpuMinSpinThreshold

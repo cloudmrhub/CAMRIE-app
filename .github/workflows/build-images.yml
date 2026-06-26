@@ -79,12 +79,14 @@ jobs:
             -t ${FARGATE_REPO}:${IMAGE_TAG} .
 
           docker tag ${FARGATE_REPO}:${IMAGE_TAG} ${FARGATE_URI}:${IMAGE_TAG}
+          docker tag ${FARGATE_REPO}:${IMAGE_TAG} ${FARGATE_URI}:${GITHUB_SHA}
           docker tag ${FARGATE_REPO}:${IMAGE_TAG} ${FARGATE_URI}:latest
 
           docker push ${FARGATE_URI}:${IMAGE_TAG}
+          docker push ${FARGATE_URI}:${GITHUB_SHA}
           docker push ${FARGATE_URI}:latest
 
-          echo "fargate_image_uri=${FARGATE_URI}:latest" >> $GITHUB_OUTPUT
+          echo "fargate_image_uri=${FARGATE_URI}:${GITHUB_SHA}" >> $GITHUB_OUTPUT
           echo ""
           echo "✓ Image pushed: ${FARGATE_URI}:latest"
 
@@ -112,12 +114,14 @@ jobs:
             -t ${FARGATE_REPO}:${GPU_TAG} .
 
           docker tag ${FARGATE_REPO}:${GPU_TAG} ${FARGATE_URI}:${GPU_TAG}
+          docker tag ${FARGATE_REPO}:${GPU_TAG} ${FARGATE_URI}:${GPU_TAG_SUFFIX}-${GITHUB_SHA}
           docker tag ${FARGATE_REPO}:${GPU_TAG} ${FARGATE_URI}:${GPU_TAG_SUFFIX}-latest
 
           docker push ${FARGATE_URI}:${GPU_TAG}
+          docker push ${FARGATE_URI}:${GPU_TAG_SUFFIX}-${GITHUB_SHA}
           docker push ${FARGATE_URI}:${GPU_TAG_SUFFIX}-latest
 
-          echo "gpu_image_uri=${FARGATE_URI}:${GPU_TAG_SUFFIX}-latest" >> $GITHUB_OUTPUT
+          echo "gpu_image_uri=${FARGATE_URI}:${GPU_TAG_SUFFIX}-${GITHUB_SHA}" >> $GITHUB_OUTPUT
           echo ""
           echo "✓ GPU image pushed: ${FARGATE_URI}:${GPU_TAG_SUFFIX}-latest"
 
@@ -129,4 +133,4 @@ jobs:
           echo "CPU (Fargate): ${{ steps.build.outputs.fargate_image_uri }}"
           echo "GPU (EC2):     ${{ steps.build-gpu.outputs.gpu_image_uri }}"
           echo ""
-          echo "Deploy workflow will pick up :latest automatically."
+          echo "Deploy workflow will resolve immutable commit tags when triggered by this run."

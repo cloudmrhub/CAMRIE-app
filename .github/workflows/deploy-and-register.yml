@@ -64,7 +64,7 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build and push Fargate image
+      - name: Build and push CPU/GPU images
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
@@ -72,12 +72,21 @@ jobs:
           set -euo pipefail
           cd calculation/src
           FARGATE_URI="${ECR_REGISTRY}/${FARGATE_REPO}"
+
           docker build --provenance=false --build-arg CAMRIE_TOOLS_REF="${CAMRIE_TOOLS_REF}" -f DockerfileFargate -t ${FARGATE_REPO}:${IMAGE_TAG} .
           docker tag ${FARGATE_REPO}:${IMAGE_TAG} ${FARGATE_URI}:${IMAGE_TAG}
           docker tag ${FARGATE_REPO}:${IMAGE_TAG} ${FARGATE_URI}:latest
           docker push ${FARGATE_URI}:${IMAGE_TAG}
           docker push ${FARGATE_URI}:latest
-          echo "✓ Force-pushed ${FARGATE_URI}:latest"
+          echo "Force-pushed ${FARGATE_URI}:${IMAGE_TAG} and :latest"
+
+          GPU_TAG="gpu-${IMAGE_TAG}"
+          docker build --provenance=false --build-arg CAMRIE_TOOLS_REF="${CAMRIE_TOOLS_REF}" -f DockerfileGpu -t ${FARGATE_REPO}:${GPU_TAG} .
+          docker tag ${FARGATE_REPO}:${GPU_TAG} ${FARGATE_URI}:${GPU_TAG}
+          docker tag ${FARGATE_REPO}:${GPU_TAG} ${FARGATE_URI}:gpu-latest
+          docker push ${FARGATE_URI}:${GPU_TAG}
+          docker push ${FARGATE_URI}:gpu-latest
+          echo "Force-pushed ${FARGATE_URI}:${GPU_TAG} and :gpu-latest"
 
   # ============================================================================
   # JOB 1: Deploy SAM Stack
@@ -120,39 +129,56 @@ jobs:
           set -euo pipefail
           ECR_REGISTRY="${ACCOUNT_ID}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com"
 
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            CPU_TAG="${{ github.event.workflow_run.head_sha }}"
+            GPU_TAG="gpu-${{ github.event.workflow_run.head_sha }}"
+            echo "Resolving images from triggering build commit: ${{ github.event.workflow_run.head_sha }}"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.force_rebuild }}" = "true" ]; then
+            CPU_TAG="${{ github.sha }}"
+            GPU_TAG="gpu-${{ github.sha }}"
+            echo "Resolving images from forced rebuild commit: ${{ github.sha }}"
+          else
+            CPU_TAG="latest"
+            GPU_TAG="gpu-latest"
+            echo "Resolving images from latest tags"
+          fi
+
           # CPU / Fargate image (required)
           FARGATE_DIGEST=$(aws ecr describe-images \
             --repository-name ${FARGATE_REPO} \
-            --image-ids imageTag=latest \
+            --image-ids imageTag="${CPU_TAG}" \
             --region ${{ env.AWS_REGION }} \
             --query 'imageDetails[0].imageDigest' \
             --output text)
 
           if [ -z "$FARGATE_DIGEST" ] || [ "$FARGATE_DIGEST" = "None" ]; then
-            echo "❌ Cannot resolve Fargate image digest — push an image first."
+            echo "Cannot resolve Fargate image digest for tag ${CPU_TAG}."
             exit 1
           fi
 
           FARGATE_URI="${ECR_REGISTRY}/${FARGATE_REPO}@${FARGATE_DIGEST}"
           echo "fargate_image_uri=${FARGATE_URI}" >> $GITHUB_OUTPUT
-          echo "Fargate (CPU): ${FARGATE_URI}"
+          echo "Fargate (CPU ${CPU_TAG}): ${FARGATE_URI}"
 
-          # GPU / EC2 image (optional — falls back to empty string if not built yet)
+          # GPU / EC2 image (optional; falls back to empty string if not built yet)
           GPU_DIGEST=$(aws ecr describe-images \
             --repository-name ${FARGATE_REPO} \
-            --image-ids imageTag=gpu-latest \
+            --image-ids imageTag="${GPU_TAG}" \
             --region ${{ env.AWS_REGION }} \
             --query 'imageDetails[0].imageDigest' \
             --output text 2>/dev/null || true)
 
           if [ -z "$GPU_DIGEST" ] || [ "$GPU_DIGEST" = "None" ]; then
-            echo "⚠️  GPU image not found — GPU path will be disabled (GpuImageUri=empty)"
+            echo "GPU image tag ${GPU_TAG} not found; GPU path will be disabled."
             echo "gpu_image_uri=" >> $GITHUB_OUTPUT
           else
             GPU_URI="${ECR_REGISTRY}/${FARGATE_REPO}@${GPU_DIGEST}"
             echo "gpu_image_uri=${GPU_URI}" >> $GITHUB_OUTPUT
-            echo "GPU (EC2):    ${GPU_URI}"
+            echo "GPU (EC2 ${GPU_TAG}): ${GPU_URI}"
           fi
+
+          echo "cpu_image_tag=${CPU_TAG}" >> $GITHUB_OUTPUT
+          echo "gpu_image_tag=${GPU_TAG}" >> $GITHUB_OUTPUT
 
       - name: Setup SAM CLI
         uses: aws-actions/setup-sam@v2
