@@ -36,7 +36,7 @@ RUN python3 -m pip install --upgrade pip \
 
 RUN julia -e 'import Pkg; Pkg.add("PackageCompiler"); Pkg.precompile()'
 COPY precompile_workload_gpu.jl /tmp/precompile_workload_gpu.jl
-RUN julia -e 'using PackageCompiler; create_sysimage([:KomaInterface, :KomaMRI, :CUDA, :NPZ, :JSON, :HDF5, :LinearAlgebra]; sysimage_path="/opt/julia-depot/komamri-gpu-sysimage.so", precompile_execution_file="/tmp/precompile_workload_gpu.jl")'
+RUN julia -e 'using PackageCompiler; create_sysimage([:KomaInterface, :CUDA]; sysimage_path="/opt/julia-depot/komamri-gpu-sysimage.so", precompile_execution_file="/tmp/precompile_workload_gpu.jl", include_transitive_dependencies=true)'
 
 # ==============================================================================
 #  Final runtime image
@@ -87,7 +87,7 @@ RUN python3 -m pip install --upgrade pip \
 
 COPY . .
 
-RUN julia -e 'using KomaInterface, KomaMRI, NPZ, JSON, HDF5, CUDA; println("GPU sysimage OK")'
+RUN julia -e 'using KomaInterface, CUDA; println("GPU sysimage OK")'
 
 RUN mkdir -p /tmp/.matplotlib /tmp/.fontconfig && chmod 777 /tmp/.matplotlib /tmp/.fontconfig
 ENV MPLCONFIGDIR=/tmp/.matplotlib

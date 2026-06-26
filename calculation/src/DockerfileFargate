@@ -36,7 +36,7 @@ RUN pip install --upgrade pip \
 
 RUN julia -e 'import Pkg; Pkg.add("PackageCompiler"); Pkg.precompile()'
 COPY precompile_workload.jl /tmp/precompile_workload.jl
-RUN julia -e 'using PackageCompiler; create_sysimage([:KomaInterface, :KomaMRI, :NPZ, :JSON, :HDF5, :LinearAlgebra]; sysimage_path="/opt/julia-depot/komamri-sysimage.so", precompile_execution_file="/tmp/precompile_workload.jl")'
+RUN julia -e 'using PackageCompiler; create_sysimage([:KomaInterface]; sysimage_path="/opt/julia-depot/komamri-sysimage.so", precompile_execution_file="/tmp/precompile_workload.jl", include_transitive_dependencies=true)'
 
 # ==============================================================================
 #  Final runtime image
@@ -80,7 +80,7 @@ RUN pip install --upgrade pip \
 
 COPY . .
 
-RUN julia -e 'using KomaInterface, KomaMRI, NPZ, JSON, HDF5; println("CPU sysimage OK")'
+RUN julia -e 'using KomaInterface; println("CPU sysimage OK")'
 
 RUN mkdir -p /tmp/.matplotlib /tmp/.fontconfig && chmod 777 /tmp/.matplotlib /tmp/.fontconfig
 ENV MPLCONFIGDIR=/tmp/.matplotlib
