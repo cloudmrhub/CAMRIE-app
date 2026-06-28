@@ -294,23 +294,80 @@ def find_ecs_task_from_execution(execution_arn, cluster, aws_profile, aws_region
     return None
 
 
-def find_batch_job_from_execution(execution_arn, aws_profile, aws_region):
-    """Return the Batch submit_job response emitted by RunJobLambda."""
-    sess = _boto_session(aws_profile, aws_region)
-    sfn = sess.client("stepfunctions")
+def _json_object(value):
+    """Best-effort JSON decode used when reading Step Functions outputs."""
+    if isinstance(value, dict):
+        return value
+    if not isinstance(value, str):
+        return {}
     try:
-        history = sfn.get_execution_history(executionArn=execution_arn, maxResults=20)
-        for ev in history["events"]:
-            detail = ev.get("taskSucceededEventDetails") or ev.get("taskStateExitedEventDetails")
-            if not detail:
-                continue
-            out = json.loads(detail.get("output", "{}"))
-            if out.get("jobId"):
-                return out
-    except Exception as e:
-        info(f"Could not resolve Batch job from execution: {e}")
+        decoded = json.loads(value)
+    except Exception:
+        return {}
+    return decoded if isinstance(decoded, dict) else {}
+
+
+def _extract_batch_job_response(value):
+    """Return a nested AWS Batch submit_job response if one is present."""
+    obj = _json_object(value)
+    if not obj:
+        return None
+    if obj.get("jobId"):
+        return obj
+    for key in ("Payload", "payload", "body", "output"):
+        if key in obj:
+            nested = _extract_batch_job_response(obj[key])
+            if nested:
+                return nested
     return None
 
+
+def find_batch_job_from_execution(execution_arn, aws_profile, aws_region,
+                                  timeout=120, interval=5):
+    """Return the Batch submit_job response emitted by RunJobLambda.
+
+    AWS Batch jobs, especially GPU Spot jobs, may not be visible immediately
+    after queue_job returns. Poll Step Functions for the Lambda output instead
+    of assuming the job ID is present after a fixed sleep.
+    """
+    if not execution_arn:
+        return None
+
+    sess = _boto_session(aws_profile, aws_region)
+    sfn = sess.client("stepfunctions")
+    deadline = time.time() + timeout
+    last_error = None
+
+    while time.time() < deadline:
+        try:
+            history = sfn.get_execution_history(
+                executionArn=execution_arn,
+                maxResults=100,
+                reverseOrder=True,
+            )
+            for ev in history.get("events", []):
+                for detail_key in (
+                    "taskSucceededEventDetails",
+                    "taskStateExitedEventDetails",
+                    "lambdaFunctionSucceededEventDetails",
+                ):
+                    detail = ev.get(detail_key)
+                    if not detail:
+                        continue
+                    for output_key in ("output", "result"):
+                        if output_key not in detail:
+                            continue
+                        batch_job = _extract_batch_job_response(detail[output_key])
+                        if batch_job:
+                            return batch_job
+        except Exception as e:
+            last_error = e
+
+        time.sleep(interval)
+
+    if last_error:
+        info(f"Could not resolve Batch job from execution: {last_error}")
+    return None
 
 def monitor_batch_job(job_id, aws_profile, aws_region):
     """Poll AWS Batch job lifecycle and print status transitions."""
@@ -687,9 +744,11 @@ def main():
     parser.add_argument("--tail-logs", action="store_true",
                         help="Tail CloudWatch logs while polling")
     parser.add_argument("--monitor-task", action="store_true",
-                        help="Monitor AWS Batch job lifecycle; falls back to legacy ECS task monitoring")
+                        help="Monitor AWS Batch job lifecycle")
+    parser.add_argument("--legacy-ecs-monitor", action="store_true",
+                        help="Fallback to legacy ECS task lookup if no Batch job ID is found")
     parser.add_argument("--cluster", default="camrie-app-prod-cluster",
-                        help="Legacy ECS cluster name for older deployments")
+                        help="Legacy ECS cluster name, only used with --legacy-ecs-monitor")
     parser.add_argument("--logs-only", default=None, metavar="TASK_ID",
                         help="Skip upload/submit — just tail logs for a task/log stream ID "
                              "(e.g. 74f378a959ff4ba4be598326ef73cf13)")
@@ -784,11 +843,14 @@ def main():
     # ── Step 4: Batch / ECS task monitor (optional) ───────────────────────────
     ecs_task_id = None
     if args.monitor_task or args.use_gpu:
-        # Give Step Functions a moment to submit the Batch job.
-        info("Waiting 10s for compute job to be registered...")
-        time.sleep(10)
+        info("Waiting up to 120s for AWS Batch job to be registered...")
         batch_job = find_batch_job_from_execution(
-            execution_arn, args.aws_profile, args.aws_region)
+            execution_arn,
+            args.aws_profile,
+            args.aws_region,
+            timeout=120,
+            interval=5,
+        )
         if batch_job:
             import threading
             monitor_thread = threading.Thread(
@@ -798,7 +860,7 @@ def main():
             )
             monitor_thread.start()
             info(f"Batch job:     {batch_job['jobId']} ({batch_job.get('compute', 'unknown')})")
-        else:
+        elif args.legacy_ecs_monitor:
             task_arn = find_ecs_task_from_execution(
                 execution_arn, args.cluster, args.aws_profile, args.aws_region)
             if task_arn:
@@ -811,9 +873,9 @@ def main():
                 )
                 monitor_thread.start()
             else:
-                info("Could not find Batch job ID or ECS task ARN — skipping compute monitor")
-
-    # ── Step 5: Poll ───────────────────────────────────────────────────────────
+                info("Could not find Batch job ID or legacy ECS task ARN; skipping compute monitor")
+        else:
+            info("Batch job ID not visible yet; skipping compute monitor and continuing pipeline polling")
     print(f"\n═══ Step 5: Polling (timeout={args.timeout}s) ═══")
 
     log_proc = None

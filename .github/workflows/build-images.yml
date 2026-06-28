@@ -7,6 +7,16 @@ on:
       - 'calculation/src/**'
       - '.github/workflows/build-images.yml'
   workflow_dispatch:
+    inputs:
+      image:
+        description: 'Image(s) to rebuild'
+        required: false
+        default: both
+        type: choice
+        options:
+          - both
+          - cpu
+          - gpu
 
 env:
   AWS_REGION: us-east-1
@@ -22,9 +32,86 @@ permissions:
   contents: read
 
 jobs:
-  build-and-push:
-    name: Build & Push to ECR
+  detect-changes:
+    name: Detect image changes
     runs-on: ubuntu-latest
+    outputs:
+      build_cpu: ${{ steps.filter.outputs.build_cpu }}
+      build_gpu: ${{ steps.filter.outputs.build_gpu }}
+
+    steps:
+      - name: Checkout CAMRIE-app
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Decide which images to build
+        id: filter
+        run: |
+          set -euo pipefail
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            case "${{ github.event.inputs.image || 'both' }}" in
+              cpu)
+                BUILD_CPU=true
+                BUILD_GPU=false
+                ;;
+              gpu)
+                BUILD_CPU=false
+                BUILD_GPU=true
+                ;;
+              *)
+                BUILD_CPU=true
+                BUILD_GPU=true
+                ;;
+            esac
+          else
+            BEFORE="${{ github.event.before }}"
+            AFTER="${{ github.sha }}"
+
+            if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+              BEFORE="HEAD^"
+            fi
+
+            CHANGED="$(git diff --name-only "$BEFORE" "$AFTER" || git diff --name-only HEAD^ HEAD)"
+            echo "Changed files:"
+            echo "$CHANGED"
+
+            BUILD_CPU=false
+            BUILD_GPU=false
+
+            while IFS= read -r path; do
+              [ -z "$path" ] && continue
+              case "$path" in
+                .github/workflows/build-images.yml)
+                  BUILD_CPU=true
+                  BUILD_GPU=true
+                  ;;
+                calculation/src/DockerfileFargate|calculation/src/precompile_workload.jl)
+                  BUILD_CPU=true
+                  ;;
+                calculation/src/DockerfileGpu|calculation/src/precompile_workload_gpu.jl)
+                  BUILD_GPU=true
+                  ;;
+                calculation/src/*)
+                  # App code, requirements, or shared build context can affect both images.
+                  BUILD_CPU=true
+                  BUILD_GPU=true
+                  ;;
+              esac
+            done <<< "$CHANGED"
+          fi
+
+          echo "build_cpu=${BUILD_CPU}" >> "$GITHUB_OUTPUT"
+          echo "build_gpu=${BUILD_GPU}" >> "$GITHUB_OUTPUT"
+          echo "CPU build: ${BUILD_CPU}"
+          echo "GPU build: ${BUILD_GPU}"
+
+  build-cpu:
+    name: Build CPU/Fargate Image
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: ${{ needs.detect-changes.outputs.build_cpu == 'true' }}
 
     steps:
       - name: Checkout CAMRIE-app
@@ -36,25 +123,18 @@ jobs:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Get AWS Account ID
-        id: account
-        run: |
-          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-          echo "account_id=${ACCOUNT_ID}" >> $GITHUB_OUTPUT
-          echo "AWS Account: ${ACCOUNT_ID}"
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
 
       - name: Generate image tag
         id: meta
         run: |
           IMAGE_TAG="${GITHUB_SHA::8}-$(date +%Y%m%d-%H%M%S)"
-          echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+          echo "image_tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
           echo "Image tag: ${IMAGE_TAG}"
 
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Build and push Fargate image
+      - name: Build and push CPU image
         id: build
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
@@ -65,33 +145,50 @@ jobs:
 
           FARGATE_URI="${ECR_REGISTRY}/${FARGATE_REPO}"
 
-          echo "╔═══════════════════════════════════════════════════════════╗"
-          echo "║   Building CAMRIE Fargate Image                           ║"
-          echo "╚═══════════════════════════════════════════════════════════╝"
-          echo "Registry: ${ECR_REGISTRY}"
-          echo "Tag:      ${IMAGE_TAG}"
-          echo ""
-
-          # --provenance=false avoids multi-platform manifests that break ECR/ECS
           docker build --provenance=false \
             --build-arg CAMRIE_TOOLS_REF="${CAMRIE_TOOLS_REF}" \
             -f DockerfileFargate \
-            -t ${FARGATE_REPO}:${IMAGE_TAG} .
+            -t "${FARGATE_REPO}:${IMAGE_TAG}" .
 
-          docker tag ${FARGATE_REPO}:${IMAGE_TAG} ${FARGATE_URI}:${IMAGE_TAG}
-          docker tag ${FARGATE_REPO}:${IMAGE_TAG} ${FARGATE_URI}:${GITHUB_SHA}
-          docker tag ${FARGATE_REPO}:${IMAGE_TAG} ${FARGATE_URI}:latest
+          docker tag "${FARGATE_REPO}:${IMAGE_TAG}" "${FARGATE_URI}:${IMAGE_TAG}"
+          docker tag "${FARGATE_REPO}:${IMAGE_TAG}" "${FARGATE_URI}:${GITHUB_SHA}"
+          docker tag "${FARGATE_REPO}:${IMAGE_TAG}" "${FARGATE_URI}:latest"
 
-          docker push ${FARGATE_URI}:${IMAGE_TAG}
-          docker push ${FARGATE_URI}:${GITHUB_SHA}
-          docker push ${FARGATE_URI}:latest
+          docker push "${FARGATE_URI}:${IMAGE_TAG}"
+          docker push "${FARGATE_URI}:${GITHUB_SHA}"
+          docker push "${FARGATE_URI}:latest"
 
-          echo "fargate_image_uri=${FARGATE_URI}:${GITHUB_SHA}" >> $GITHUB_OUTPUT
-          echo ""
-          echo "✓ Image pushed: ${FARGATE_URI}:latest"
+          echo "CPU image pushed: ${FARGATE_URI}:${GITHUB_SHA}"
+
+  build-gpu:
+    name: Build GPU/EC2 Image
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: ${{ needs.detect-changes.outputs.build_gpu == 'true' }}
+
+    steps:
+      - name: Checkout CAMRIE-app
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Generate image tag
+        id: meta
+        run: |
+          IMAGE_TAG="${GITHUB_SHA::8}-$(date +%Y%m%d-%H%M%S)"
+          echo "image_tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "Image tag: ${IMAGE_TAG}"
 
       - name: Build and push GPU image
-        id: build-gpu
+        id: build
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ steps.meta.outputs.image_tag }}
@@ -102,35 +199,30 @@ jobs:
           FARGATE_URI="${ECR_REGISTRY}/${FARGATE_REPO}"
           GPU_TAG="${GPU_TAG_SUFFIX}-${IMAGE_TAG}"
 
-          echo "╔═══════════════════════════════════════════════════════════╗"
-          echo "║   Building CAMRIE GPU Image (CUDA/EC2)                    ║"
-          echo "╚═══════════════════════════════════════════════════════════╝"
-          echo "Tag: ${GPU_TAG}"
-          echo ""
-
           docker build --provenance=false \
             --build-arg CAMRIE_TOOLS_REF="${CAMRIE_TOOLS_REF}" \
             -f DockerfileGpu \
-            -t ${FARGATE_REPO}:${GPU_TAG} .
+            -t "${FARGATE_REPO}:${GPU_TAG}" .
 
-          docker tag ${FARGATE_REPO}:${GPU_TAG} ${FARGATE_URI}:${GPU_TAG}
-          docker tag ${FARGATE_REPO}:${GPU_TAG} ${FARGATE_URI}:${GPU_TAG_SUFFIX}-${GITHUB_SHA}
-          docker tag ${FARGATE_REPO}:${GPU_TAG} ${FARGATE_URI}:${GPU_TAG_SUFFIX}-latest
+          docker tag "${FARGATE_REPO}:${GPU_TAG}" "${FARGATE_URI}:${GPU_TAG}"
+          docker tag "${FARGATE_REPO}:${GPU_TAG}" "${FARGATE_URI}:${GPU_TAG_SUFFIX}-${GITHUB_SHA}"
+          docker tag "${FARGATE_REPO}:${GPU_TAG}" "${FARGATE_URI}:${GPU_TAG_SUFFIX}-latest"
 
-          docker push ${FARGATE_URI}:${GPU_TAG}
-          docker push ${FARGATE_URI}:${GPU_TAG_SUFFIX}-${GITHUB_SHA}
-          docker push ${FARGATE_URI}:${GPU_TAG_SUFFIX}-latest
+          docker push "${FARGATE_URI}:${GPU_TAG}"
+          docker push "${FARGATE_URI}:${GPU_TAG_SUFFIX}-${GITHUB_SHA}"
+          docker push "${FARGATE_URI}:${GPU_TAG_SUFFIX}-latest"
 
-          echo "gpu_image_uri=${FARGATE_URI}:${GPU_TAG_SUFFIX}-${GITHUB_SHA}" >> $GITHUB_OUTPUT
-          echo ""
-          echo "✓ GPU image pushed: ${FARGATE_URI}:${GPU_TAG_SUFFIX}-latest"
+          echo "GPU image pushed: ${FARGATE_URI}:${GPU_TAG_SUFFIX}-${GITHUB_SHA}"
 
-      - name: Build Summary
+  summary:
+    name: Build Summary
+    runs-on: ubuntu-latest
+    needs: [detect-changes, build-cpu, build-gpu]
+    if: always()
+    steps:
+      - name: Print summary
         run: |
-          echo "╔═══════════════════════════════════════════════════════════╗"
-          echo "║   Build Complete                                          ║"
-          echo "╚═══════════════════════════════════════════════════════════╝"
-          echo "CPU (Fargate): ${{ steps.build.outputs.fargate_image_uri }}"
-          echo "GPU (EC2):     ${{ steps.build-gpu.outputs.gpu_image_uri }}"
-          echo ""
-          echo "Deploy workflow will resolve immutable commit tags when triggered by this run."
+          echo "CPU requested: ${{ needs.detect-changes.outputs.build_cpu }}"
+          echo "GPU requested: ${{ needs.detect-changes.outputs.build_gpu }}"
+          echo "CPU result:    ${{ needs.build-cpu.result }}"
+          echo "GPU result:    ${{ needs.build-gpu.result }}"

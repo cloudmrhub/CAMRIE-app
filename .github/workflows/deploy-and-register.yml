@@ -129,6 +129,16 @@ jobs:
           set -euo pipefail
           ECR_REGISTRY="${ACCOUNT_ID}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com"
 
+          resolve_ecr_digest() {
+            local tag="$1"
+            aws ecr describe-images \
+              --repository-name "${FARGATE_REPO}" \
+              --image-ids imageTag="${tag}" \
+              --region ${{ env.AWS_REGION }} \
+              --query 'imageDetails[0].imageDigest' \
+              --output text 2>/dev/null || true
+          }
+
           if [ "${{ github.event_name }}" = "workflow_run" ]; then
             CPU_TAG="${{ github.event.workflow_run.head_sha }}"
             GPU_TAG="gpu-${{ github.event.workflow_run.head_sha }}"
@@ -143,43 +153,44 @@ jobs:
             echo "Resolving images from latest tags"
           fi
 
-          # CPU / Fargate image (required)
-          FARGATE_DIGEST=$(aws ecr describe-images \
-            --repository-name ${FARGATE_REPO} \
-            --image-ids imageTag="${CPU_TAG}" \
-            --region ${{ env.AWS_REGION }} \
-            --query 'imageDetails[0].imageDigest' \
-            --output text)
-
+          # CPU / Fargate image is required. On split builds, the triggering
+          # commit may only have built the GPU image, so fall back to :latest.
+          RESOLVED_CPU_TAG="${CPU_TAG}"
+          FARGATE_DIGEST="$(resolve_ecr_digest "${CPU_TAG}")"
+          if { [ -z "$FARGATE_DIGEST" ] || [ "$FARGATE_DIGEST" = "None" ]; } && [ "$CPU_TAG" != "latest" ]; then
+            echo "CPU image tag ${CPU_TAG} not found; falling back to latest."
+            RESOLVED_CPU_TAG="latest"
+            FARGATE_DIGEST="$(resolve_ecr_digest latest)"
+          fi
           if [ -z "$FARGATE_DIGEST" ] || [ "$FARGATE_DIGEST" = "None" ]; then
-            echo "Cannot resolve Fargate image digest for tag ${CPU_TAG}."
+            echo "Cannot resolve Fargate image digest for tag ${RESOLVED_CPU_TAG}."
             exit 1
           fi
 
           FARGATE_URI="${ECR_REGISTRY}/${FARGATE_REPO}@${FARGATE_DIGEST}"
           echo "fargate_image_uri=${FARGATE_URI}" >> $GITHUB_OUTPUT
-          echo "Fargate (CPU ${CPU_TAG}): ${FARGATE_URI}"
+          echo "Fargate (CPU ${RESOLVED_CPU_TAG}): ${FARGATE_URI}"
 
-          # GPU / EC2 image (optional; falls back to empty string if not built yet)
-          GPU_DIGEST=$(aws ecr describe-images \
-            --repository-name ${FARGATE_REPO} \
-            --image-ids imageTag="${GPU_TAG}" \
-            --region ${{ env.AWS_REGION }} \
-            --query 'imageDetails[0].imageDigest' \
-            --output text 2>/dev/null || true)
-
+          # GPU / EC2 image is optional. On split builds, fall back to
+          # :gpu-latest when this commit did not rebuild GPU.
+          RESOLVED_GPU_TAG="${GPU_TAG}"
+          GPU_DIGEST="$(resolve_ecr_digest "${GPU_TAG}")"
+          if { [ -z "$GPU_DIGEST" ] || [ "$GPU_DIGEST" = "None" ]; } && [ "$GPU_TAG" != "gpu-latest" ]; then
+            echo "GPU image tag ${GPU_TAG} not found; falling back to gpu-latest."
+            RESOLVED_GPU_TAG="gpu-latest"
+            GPU_DIGEST="$(resolve_ecr_digest gpu-latest)"
+          fi
           if [ -z "$GPU_DIGEST" ] || [ "$GPU_DIGEST" = "None" ]; then
-            echo "GPU image tag ${GPU_TAG} not found; GPU path will be disabled."
+            echo "GPU image tag ${RESOLVED_GPU_TAG} not found; GPU path will be disabled."
             echo "gpu_image_uri=" >> $GITHUB_OUTPUT
           else
             GPU_URI="${ECR_REGISTRY}/${FARGATE_REPO}@${GPU_DIGEST}"
             echo "gpu_image_uri=${GPU_URI}" >> $GITHUB_OUTPUT
-            echo "GPU (EC2 ${GPU_TAG}): ${GPU_URI}"
+            echo "GPU (EC2 ${RESOLVED_GPU_TAG}): ${GPU_URI}"
           fi
 
-          echo "cpu_image_tag=${CPU_TAG}" >> $GITHUB_OUTPUT
-          echo "gpu_image_tag=${GPU_TAG}" >> $GITHUB_OUTPUT
-
+          echo "cpu_image_tag=${RESOLVED_CPU_TAG}" >> $GITHUB_OUTPUT
+          echo "gpu_image_tag=${RESOLVED_GPU_TAG}" >> $GITHUB_OUTPUT
       - name: Setup SAM CLI
         uses: aws-actions/setup-sam@v2
         with:
