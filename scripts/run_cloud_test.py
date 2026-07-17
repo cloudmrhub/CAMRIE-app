@@ -164,7 +164,13 @@ def queue_job(base_url, token, file_keys, sim_config):
     return r.json()
 
 
-def start_log_tail(log_group, aws_profile, aws_region, since="1m", task_id=None):
+def batch_log_stream_prefix(use_gpu):
+    """CloudWatch log stream prefix configured in calculation/template.yaml."""
+    return "camrie-gpu-batch" if use_gpu else "camrie-batch"
+
+
+def start_log_tail(log_group, aws_profile, aws_region, since="1m",
+                   log_stream_name=None, stream_prefix=None):
     """Start a background process that tails CloudWatch logs."""
     cmd = [
         "aws", "logs", "tail", log_group,
@@ -174,16 +180,16 @@ def start_log_tail(log_group, aws_profile, aws_region, since="1m", task_id=None)
         "--region", aws_region,
         "--format", "short",
     ]
-    # Derive stream prefix from task_id.
-    # Fargate stream: camrie/camrie-worker/{task_id}
-    # GPU stream:     camrie-gpu/camrie-worker/{task_id}
-    if task_id:
-        if "gpu" in log_group:
-            prefix = f"camrie-gpu/camrie-worker/{task_id}"
-        else:
-            prefix = f"camrie/camrie-worker/{task_id}"
-        cmd.extend(["--log-stream-name-prefix", prefix])
-    info(f"Tailing logs: {log_group}" + (f" (task {task_id})" if task_id else ""))
+    if log_stream_name:
+        cmd.extend(["--log-stream-names", log_stream_name])
+        target = f"stream {log_stream_name}"
+    elif stream_prefix:
+        cmd.extend(["--log-stream-name-prefix", stream_prefix])
+        target = f"prefix {stream_prefix}"
+    else:
+        target = "all streams"
+
+    info(f"Tailing logs: {log_group} ({target})")
     try:
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         return proc
@@ -192,52 +198,67 @@ def start_log_tail(log_group, aws_profile, aws_region, since="1m", task_id=None)
         return None
 
 
-def wait_for_log_stream(log_group, task_id, aws_profile, aws_region, timeout=1800):
+def _batch_log_stream_name(job):
+    """Return the CloudWatch log stream from an AWS Batch job description."""
+    for attempt in reversed(job.get("attempts", []) or []):
+        stream = (attempt.get("container") or {}).get("logStreamName")
+        if stream:
+            return stream
+    return (job.get("container") or {}).get("logStreamName")
+
+
+def wait_for_batch_log_stream(job_id, aws_profile, aws_region, timeout=900, interval=10):
+    """Wait until AWS Batch exposes the attempt log stream name.
+
+    Batch creates the CloudWatch stream only after a container attempt starts.
+    GPU Spot jobs can sit in SUBMITTED/RUNNABLE while capacity is found; during
+    that time no log stream exists yet.
     """
-    Block until the task's CloudWatch log stream appears and has at least one event.
-    Prints a heartbeat every 30s so you know it's not stuck.
-    Returns True when logs appear, False on timeout.
-    """
-    import boto3
-    sess = boto3.Session(profile_name=aws_profile, region_name=aws_region)
-    cw   = sess.client("logs")
-    prefix = f"camrie-gpu/camrie-worker/{task_id}" if "gpu" in log_group \
-             else f"camrie/camrie-worker/{task_id}"
+    sess = _boto_session(aws_profile, aws_region)
+    batch = sess.client("batch")
     t0 = time.time()
+    seen_status = None
     last_msg = 0
-    print(f"  Waiting for log stream: {prefix}")
-    print(f"  (GPU: Julia loads precompiled cache (~30s), then CUDA PTX JIT (~5-10 min on fresh instance)")
+    terminal = {"SUCCEEDED", "FAILED"}
+
+    info(f"Waiting for Batch log stream for job {job_id}...")
     while time.time() - t0 < timeout:
         elapsed = time.time() - t0
         try:
-            resp = cw.get_log_events(
-                logGroupName=log_group,
-                logStreamName=prefix,
-                limit=5,
-                startFromHead=True,
-            )
-            if resp.get("events"):
-                print(f"  [{elapsed:.0f}s] First log line appeared — container is alive")
-                return True
-        except cw.exceptions.ResourceNotFoundException:
-            pass
-        except Exception as e:
-            pass
-        if elapsed - last_msg >= 30:
-            # Show ECS task status as heartbeat
-            try:
-                ecs = sess.client("ecs")
-                cluster = "camrie-app-prod-cluster"
-                tasks = ecs.list_tasks(cluster=cluster, desiredStatus="RUNNING")["taskArns"]
-                running = len(tasks)
-            except Exception:
-                running = "?"
-            print(f"  [{elapsed:.0f}s] Still initializing... (ECS running tasks: {running}) — waiting for first log line")
-            last_msg = elapsed
-        time.sleep(10)
-    print(f"  Timeout waiting for log stream after {timeout}s")
-    return False
+            resp = batch.describe_jobs(jobs=[job_id])
+            jobs = resp.get("jobs", [])
+            if not jobs:
+                time.sleep(interval)
+                continue
 
+            job = jobs[0]
+            status = job.get("status", "UNKNOWN")
+            reason = job.get("statusReason", "")
+            if status != seen_status:
+                suffix = f" ({reason})" if reason else ""
+                info(f"Batch status while waiting for logs: {status}{suffix}")
+                seen_status = status
+
+            stream = _batch_log_stream_name(job)
+            if stream:
+                ok(f"Batch log stream: {stream}")
+                return stream
+
+            if status in terminal:
+                info("Batch job reached a terminal state before a log stream was exposed.")
+                return None
+        except Exception as e:
+            if elapsed - last_msg >= 30:
+                info(f"Batch log-stream lookup error: {e}")
+                last_msg = elapsed
+
+        if elapsed - last_msg >= 30:
+            info(f"[{elapsed:.0f}s] No Batch log stream yet; container may still be queued/provisioning")
+            last_msg = elapsed
+        time.sleep(interval)
+
+    info(f"No Batch log stream found after {timeout}s")
+    return None
 
 def stream_log_lines(proc, max_lines=None):
     """Read and print available lines from the log tail process (non-blocking)."""
@@ -385,6 +406,7 @@ def monitor_batch_job(job_id, aws_profile, aws_region):
     t_running = None
     t_done = None
     compute = None
+    seen_log_stream = None
 
     terminal = {"SUCCEEDED", "FAILED"}
     for _ in range(160):  # up to 40 min
@@ -402,6 +424,11 @@ def monitor_batch_job(job_id, aws_profile, aws_region):
                 for tag_key, tag_val in job.get("tags", {}).items():
                     if tag_key.lower() == "compute":
                         compute = tag_val
+
+            log_stream = _batch_log_stream_name(job)
+            if log_stream and log_stream != seen_log_stream:
+                info(f"Log stream: {log_stream}")
+                seen_log_stream = log_stream
 
             if status != seen_status:
                 elapsed = time.time() - t_submitted
@@ -758,7 +785,9 @@ def main():
 
     args = parser.parse_args()
 
-    # Auto-select log group
+    # Auto-select log group. Keep track of whether the user forced it, because
+    # Batch routing may later tell us a GPU-requested job was actually sent to CPU.
+    log_group_explicit = args.log_group is not None
     if not args.log_group:
         args.log_group = "/ecs/camrie-gpu-Prod" if args.use_gpu else "/ecs/camrie-Prod"
 
@@ -842,7 +871,9 @@ def main():
 
     # ── Step 4: Batch / ECS task monitor (optional) ───────────────────────────
     ecs_task_id = None
-    if args.monitor_task or args.use_gpu:
+    batch_job_id = None
+    resolved_compute = "gpu" if args.use_gpu else "cpu"
+    if args.monitor_task or args.use_gpu or args.tail_logs:
         info("Waiting up to 120s for AWS Batch job to be registered...")
         batch_job = find_batch_job_from_execution(
             execution_arn,
@@ -852,14 +883,23 @@ def main():
             interval=5,
         )
         if batch_job:
+            batch_job_id = batch_job.get("jobId")
+            resolved_compute = batch_job.get("compute") or resolved_compute
+            routing = batch_job.get("routingReason")
             import threading
             monitor_thread = threading.Thread(
                 target=monitor_batch_job,
-                args=(batch_job["jobId"], args.aws_profile, args.aws_region),
+                args=(batch_job_id, args.aws_profile, args.aws_region),
                 daemon=True,
             )
             monitor_thread.start()
-            info(f"Batch job:     {batch_job['jobId']} ({batch_job.get('compute', 'unknown')})")
+            info(f"Batch job:     {batch_job_id} ({resolved_compute})" + (f" reason={routing}" if routing else ""))
+
+            if resolved_compute in ("cpu", "gpu") and not log_group_explicit:
+                routed_log_group = "/ecs/camrie-gpu-Prod" if resolved_compute == "gpu" else "/ecs/camrie-Prod"
+                if args.log_group != routed_log_group:
+                    info(f"Actual Batch route is {resolved_compute}; switching log group to {routed_log_group}")
+                    args.log_group = routed_log_group
         elif args.legacy_ecs_monitor:
             task_arn = find_ecs_task_from_execution(
                 execution_arn, args.cluster, args.aws_profile, args.aws_region)
@@ -880,14 +920,36 @@ def main():
 
     log_proc = None
     if args.tail_logs:
-        # For GPU: wait for the log stream to appear before starting tail
-        # (stream doesn't exist until container writes its first line)
-        if args.use_gpu and ecs_task_id:
-            wait_for_log_stream(args.log_group, ecs_task_id,
-                                args.aws_profile, args.aws_region)
-        log_proc = start_log_tail(args.log_group, args.aws_profile, args.aws_region,
-                                  since="5m", task_id=ecs_task_id)
+        log_stream_name = None
+        stream_prefix = None
+        logs_use_gpu = resolved_compute == "gpu"
 
+        if batch_job_id:
+            # Exact stream is best, but it only exists after Batch starts a container attempt.
+            log_stream_name = wait_for_batch_log_stream(
+                batch_job_id,
+                args.aws_profile,
+                args.aws_region,
+                timeout=min(args.timeout, 900),
+                interval=10,
+            )
+            if not log_stream_name:
+                stream_prefix = batch_log_stream_prefix(logs_use_gpu)
+                info(f"Falling back to Batch log prefix: {stream_prefix}")
+        elif ecs_task_id:
+            # Legacy ECS path, kept only for older deployments.
+            stream_prefix = f"camrie-gpu/camrie-worker/{ecs_task_id}" if args.use_gpu else f"camrie/camrie-worker/{ecs_task_id}"
+        else:
+            stream_prefix = batch_log_stream_prefix(logs_use_gpu)
+
+        log_proc = start_log_tail(
+            args.log_group,
+            args.aws_profile,
+            args.aws_region,
+            since="10m",
+            log_stream_name=log_stream_name,
+            stream_prefix=stream_prefix,
+        )
     final = poll_pipeline(args.api_base, token, pipeline_id,
                           timeout=args.timeout, interval=15,
                           log_proc=log_proc)
