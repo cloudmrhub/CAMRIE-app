@@ -27,7 +27,7 @@ ENV JULIA_NUM_PRECOMPILE_TASKS=8
 ENV JULIA_PKG_DISABLE_PKGIMAGES=true
 ENV CAMRIE_JULIA_PROJECT=/opt/camrie-julia
 ENV JULIA_PROJECT=/opt/camrie-julia
-ARG CAMRIE_TOOLS_REF=v1
+ARG CAMRIE_TOOLS_REF=main
 
 # -- Julia packages and sysimage ---------------------------------------------
 RUN pip install --upgrade pip \
@@ -60,7 +60,7 @@ ENV JULIA_PKG_DISABLE_PKGIMAGES=true
 ENV CAMRIE_JULIA_SYSIMAGE=/opt/julia-depot/komamri-sysimage.so
 ENV CAMRIE_JULIA_PROJECT=/opt/camrie-julia
 ENV JULIA_PROJECT=/opt/camrie-julia
-ARG CAMRIE_TOOLS_REF=v1
+ARG CAMRIE_TOOLS_REF=main
 ENV CAMRIE_TOOLS_REF=${CAMRIE_TOOLS_REF}
 ENV PATH=/usr/local/bin:/opt/julia/bin:$PATH
 

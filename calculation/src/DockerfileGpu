@@ -28,7 +28,7 @@ ENV JULIA_NUM_PRECOMPILE_TASKS=8
 ENV JULIA_CUDA_USE_BINARYBUILDER=true
 ENV CAMRIE_JULIA_PROJECT=/opt/camrie-julia
 ENV JULIA_PROJECT=/opt/camrie-julia
-ARG CAMRIE_TOOLS_REF=v1
+ARG CAMRIE_TOOLS_REF=main
 
 RUN python3 -m pip install --upgrade pip \
  && python3 -m pip install "camrie-tools @ git+https://github.com/cloudmrhub/camrie-tools.git@${CAMRIE_TOOLS_REF}" \
@@ -69,7 +69,7 @@ ENV JULIA_CUDA_USE_BINARYBUILDER=true
 ENV CAMRIE_JULIA_SYSIMAGE=/opt/julia-depot/komamri-gpu-sysimage.so
 ENV CAMRIE_JULIA_PROJECT=/opt/camrie-julia
 ENV JULIA_PROJECT=/opt/camrie-julia
-ARG CAMRIE_TOOLS_REF=v1
+ARG CAMRIE_TOOLS_REF=main
 ENV CAMRIE_TOOLS_REF=${CAMRIE_TOOLS_REF}
 ENV PATH=/usr/local/bin:/opt/julia/bin:$PATH
 

@@ -35,7 +35,7 @@ env:
   CLOUDMR_BRAIN_STACK: cloudmrhub-brain
   FARGATE_REPO: camrie-fargate
   APP_NAME: CAMRIE
-  CAMRIE_TOOLS_REF: v1
+  CAMRIE_TOOLS_REF: main
 
 permissions:
   id-token: write
