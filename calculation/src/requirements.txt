@@ -18,4 +18,4 @@ vtk
 # CloudMR utilities (pynico-eros-montin is brought in by cmtools)
 # pynico_eros_montin still imports pkg_resources, which setuptools 81+ removed.
 setuptools<81
-cmtools @ git+https://github.com/cloudmrhub/cloudmr-tools.git@v1
+cmtools @ git+https://github.com/cloudmrhub/cloudmr-tools.git@main
