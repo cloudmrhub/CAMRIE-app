@@ -303,8 +303,16 @@ def resolve_relative_path(root_dir, value):
     candidate = Path(root_dir) / value
     if candidate.exists():
         return candidate
-    matches = list(Path(root_dir).rglob(Path(value).name))
-    return matches[0] if matches else None
+    name = Path(value).name
+    matches = list(Path(root_dir).rglob(name))
+    if matches:
+        return matches[0]
+    # Also try compressed variant (.nii → .nii.gz, etc.)
+    if not name.endswith(".gz"):
+        matches = list(Path(root_dir).rglob(name + ".gz"))
+        if matches:
+            return matches[0]
+    return None
 
 
 def scan_bodymodel_for_map(root_dir, role):
@@ -474,9 +482,10 @@ def sequence_descriptor_from_spec(sequence_spec):
 
 def sequence_name(index, sequence_spec, descriptor):
     desc = unwrap_file_descriptor(descriptor)
+    # alias takes priority; fall back to filename/key if alias is absent or blank
+    alias = (sequence_spec.get("alias") or sequence_spec.get("name") or "").strip()
     raw = (
-        sequence_spec.get("name")
-        or sequence_spec.get("alias")
+        alias
         or desc.get("filename")
         or desc.get("key")
         or f"sequence_{index:03d}"
@@ -524,7 +533,12 @@ def compute_auto_isocenter(rho_path):
     origin = np.array(rho_img.GetOrigin())
     spacing = np.array(rho_img.GetSpacing())
     direction = np.array(rho_img.GetDirection()).reshape(3, 3)
-    return (origin + direction @ ((size - 1) / 2.0 * spacing)).tolist()
+    center = origin + direction @ ((size - 1) / 2.0 * spacing)
+    # Body models stored with meter-unit NIfTI headers (spacing ~0.001–0.01)
+    # need to be converted to mm for the pipeline.
+    if np.max(np.abs(spacing)) < 0.1:
+        center = center * 1000.0
+    return center.tolist()
 
 
 def add_auxiliary_file(out, src, aux_dir, basename=None):

@@ -1,0 +1,77 @@
+{
+    "version": "v1",
+    "alias": "pts local test",
+    "output": {
+        "matlab": true,
+        "SNR": false,
+        "RSSreconstruction": true
+    },
+    "task": {
+        "name": "camrieJob",
+        "version": "v1",
+        "application": "CAMRIE",
+        "alias": "pts_local",
+        "pipeline": "local-pts-001",
+        "options": {
+            "sequences": [
+                {
+                    "alias": "T1 Spin Echo",
+                    "file": {
+                        "type": "file",
+                        "id": "local-seq-t1",
+                        "options": {
+                            "type": "local",
+                            "filename": "/mnt/c/Users/montie01/PROJECTS/CAMRIE-app-1/data/sequences/T1-Weighted_Spin_Echo.seq",
+                            "options": {}
+                        }
+                    },
+                    "geometry": {
+                        "isocenter_mm": null,
+                        "fov_mm": [300, 300],
+                        "matrix": [128, 128],
+                        "slice": {
+                            "num_slices": 20,
+                            "thickness_mm": 1.5,
+                            "gap_mm": 0
+                        }
+                    }
+                },
+                {
+                    "alias": "T2 Spin Echo",
+                    "file": {
+                        "type": "file",
+                        "id": "local-seq-t2",
+                        "options": {
+                            "type": "local",
+                            "filename": "/mnt/c/Users/montie01/PROJECTS/CAMRIE-app-1/data/sequences/T2-Weighted_Spin_Echo.mtrk",
+                            "options": {}
+                        }
+                    },
+                    "geometry": {
+                        "isocenter_mm": null,
+                        "fov_mm": [300, 300],
+                        "matrix": [128, 128],
+                        "slice": {
+                            "num_slices": 20,
+                            "thickness_mm": 1.5,
+                            "gap_mm": 0
+                        }
+                    }
+                }
+            ],
+            "bodymodel": {
+                "type": "file",
+                "id": "local-pts-bodymodel",
+                "options": {
+                    "type": "local",
+                    "filename": "/mnt/c/Users/montie01/PROJECTS/CAMRIE-app-1/data/pts.zip",
+                    "options": {}
+                }
+            },
+            "marie_inputs": {
+                "b0": 1.5,
+                "nucleus": "1H"
+            }
+        }
+    }
+}

@@ -3,6 +3,9 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# Agent index (shared by VS Code Copilot chat and Codex, never committed)
+AGENTS.md
+
 # Local dev — pipeline outputs and temp data
 calculation/local_out/
 calculation/phantom/
