@@ -18,10 +18,12 @@
                     "alias": "T1 Spin Echo",
                     "file": {
                         "type": "file",
-                        "id": "local-seq-t1",
+                        "id": "pts-seq-t1",
                         "options": {
-                            "type": "local",
-                            "filename": "/mnt/c/Users/montie01/PROJECTS/CAMRIE-app-1/data/sequences/T1-Weighted_Spin_Echo.seq",
+                            "type": "s3",
+                            "filename": "T1-Weighted_Spin_Echo.seq",
+                            "bucket": "cloudmr-data-cloudmrhub-brain-us-east-1",
+                            "key": "CAMRIE/pts/T1-Weighted_Spin_Echo.seq",
                             "options": {}
                         }
                     },
@@ -40,10 +42,12 @@
                     "alias": "T2 Spin Echo",
                     "file": {
                         "type": "file",
-                        "id": "local-seq-t2",
+                        "id": "pts-seq-t2",
                         "options": {
-                            "type": "local",
-                            "filename": "/mnt/c/Users/montie01/PROJECTS/CAMRIE-app-1/data/sequences/T2-Weighted_Spin_Echo.mtrk",
+                            "type": "s3",
+                            "filename": "T2-Weighted_Spin_Echo.mtrk",
+                            "bucket": "cloudmr-data-cloudmrhub-brain-us-east-1",
+                            "key": "CAMRIE/pts/T2-Weighted_Spin_Echo.mtrk",
                             "options": {}
                         }
                     },
@@ -61,10 +65,12 @@
             ],
             "bodymodel": {
                 "type": "file",
-                "id": "local-pts-bodymodel",
+                "id": "pts-bodymodel",
                 "options": {
-                    "type": "local",
-                    "filename": "/mnt/c/Users/montie01/PROJECTS/CAMRIE-app-1/data/pts.zip",
+                    "type": "s3",
+                    "filename": "pts.zip",
+                    "bucket": "cloudmr-data-cloudmrhub-brain-us-east-1",
+                    "key": "CAMRIE/pts/pts.zip",
                     "options": {}
                 }
             },
