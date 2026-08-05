@@ -23,7 +23,7 @@ env:
   FARGATE_REPO: camrie-fargate
   # camrie-tools package ref installed into the Docker images.
   # Use a branch while iterating; switch to a tag/SHA for reproducible releases.
-  CAMRIE_TOOLS_REF: v1.1
+  CAMRIE_TOOLS_REF: v1.2
   # Same ECR repo, separate tags: :latest (CPU/Fargate) and :gpu-latest (EC2/GPU)
   GPU_TAG_SUFFIX: gpu
 
