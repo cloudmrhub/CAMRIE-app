@@ -32,13 +32,7 @@ ARG CAMRIE_TOOLS_REF=main
 # -- Julia packages and sysimage ---------------------------------------------
 RUN pip install --upgrade pip \
  && pip install "camrie-tools @ git+https://github.com/cloudmrhub/camrie-tools.git@${CAMRIE_TOOLS_REF}" \
- && camrie-install-julia --cpu --update --project-dir /opt/camrie-julia --install-dir /opt/julia-depot
-
-# Patch KomaInterface: rescale_fov! uses 5-arg Grad constructor which was removed
-# in KomaMRI ≥0.10.  Fix: pass g.first and g.last as the two extra args.
-RUN find /opt/julia-depot/packages/KomaInterface -name "simulate.jl" \
- | xargs sed -i \
-   's/Grad(g\.A \.\* scale\[i\], g\.T, g\.rise, g\.fall, g\.delay)/Grad(g.A .* scale[i], g.T, g.rise, g.fall, g.delay, g.first, g.last)/g'
+ && camrie-install-julia --cpu --project-dir /opt/camrie-julia --install-dir /opt/julia-depot
 
 RUN julia -e 'import Pkg; Pkg.add("PackageCompiler"); Pkg.precompile()'
 COPY precompile_workload.jl /tmp/precompile_workload.jl
