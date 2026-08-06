@@ -1,0 +1,46 @@
+{
+    "task": {
+        "options": {
+            "bodymodel": {
+                "type": "local",
+                "local_path": "/mnt/c/Users/montie01/PROJECTS/CAMRIE-app-1/calculation/local_out/ixi-birdcage.zip",
+                "filename": "ixi-birdcage.zip"
+            },
+            "sequences": [
+                {
+                    "alias": "PD_SE",
+                    "file": {
+                        "type": "local",
+                        "local_path": "/mnt/c/Users/montie01/PROJECTS/CAMRIE-app-1/data/sequences/PD-Weighted_Spin_Echo.seq",
+                        "filename": "PD-Weighted_Spin_Echo.seq"
+                    },
+                    "geometry": {
+                        "isocenter_mm": null,
+                        "fov_mm": [180, 257],
+                        "matrix": [180, 257],
+                        "slice": {
+                            "num_slices": 2,
+                            "thickness_mm": 2,
+                            "gap_mm": 0
+                        }
+                    }
+                }
+            ],
+            "marie_inputs": {
+                "b0": 3,
+                "nucleus": "1H"
+            },
+            "simulation": {
+                "spin_factor": 1
+            }
+        }
+    },
+    "output": {
+        "matlab": false,
+        "SNR": false,
+        "RSSreconstruction": true
+    },
+    "application": "CAMRIE",
+    "pipeline": "local-ixi-test",
+    "user_id": "local-user"
+}
