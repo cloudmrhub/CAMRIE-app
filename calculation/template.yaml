@@ -390,16 +390,6 @@ Resources:
       Policies:
         - Statement:
             - Effect: Allow
-              Action: 
-                - batch:SubmitJob
-                - batch:TagResource
-              Resource: "*"
-            - Effect: Allow
-              Action: [iam:PassRole]
-              Resource:
-                - !GetAtt FargateTaskExecutionRole.Arn
-                - !GetAtt FargateTaskRole.Arn
-            - Effect: Allow
               Action: [s3:PutObject]
               Resource: !Sub "arn:aws:s3:::${DataBucketPName}/_camrie_events/*"
             - Effect: Allow
@@ -419,7 +409,6 @@ Resources:
 
         import boto3
 
-        batch = boto3.client("batch")
         s3 = boto3.client("s3")
 
         DEFAULT_VOXELS_PER_SLICE = 256 * 256
@@ -604,31 +593,17 @@ Resources:
             job_name = clean_job_name(event)
 
             print(
-                f"Submitting {job_name} to Batch {compute} queue "
+                f"Routing {job_name} \u2192 Batch {compute} queue "
                 f"(estimated_spins={estimated_spins}, reason={reason})"
             )
-            response = batch.submit_job(
-                jobName=job_name,
-                jobQueue=queue,
-                jobDefinition=definition,
-                containerOverrides={
-                    "environment": [{"name": "FILE_EVENT", "value": payload}],
-                },
-                tags={
-                    "App": "CAMRIE",
-                    "Compute": compute,
-                    "RoutingReason": reason,
-                },
-            )
             return {
-                "jobId": response["jobId"],
                 "jobName": job_name,
                 "jobQueue": queue,
                 "jobDefinition": definition,
+                "payload": payload,
                 "compute": compute,
                 "routingReason": reason,
                 "estimatedSpins": estimated_spins,
-                "statusCode": 202,
             }
 
   # -- IAM role for Step Functions -------------------------------------------
@@ -643,13 +618,18 @@ Resources:
               Service: states.amazonaws.com
             Action: sts:AssumeRole
       Policies:
-        - PolicyName: InvokeLambda
+        - PolicyName: InvokeLambdaAndBatch
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
               - Effect: Allow
                 Action: lambda:InvokeFunction
                 Resource: !GetAtt RunJobLambda.Arn
+              - Effect: Allow
+                Action:
+                  - batch:SubmitJob
+                  - batch:TagResource
+                Resource: "*"
 
   # -- Step Functions state machine ------------------------------------------
   CalculationStateMachine:
@@ -658,11 +638,58 @@ Resources:
       Role: !GetAtt StateMachineRole.Arn
       Definition:
         Comment: CAMRIE simulation job orchestrator
-        StartAt: RunJob
+        StartAt: RouteJob
         States:
-          RunJob:
+          RouteJob:
             Type: Task
             Resource: !GetAtt RunJobLambda.Arn
+            Next: ChooseCompute
+            Catch:
+              - ErrorEquals: ["States.ALL"]
+                ResultPath: $.error
+                Next: FailureState
+          ChooseCompute:
+            Type: Choice
+            Choices:
+              - Variable: $.compute
+                StringEquals: gpu
+                Next: SubmitGpuJob
+            Default: SubmitCpuJob
+          SubmitCpuJob:
+            Type: Task
+            Resource: arn:aws:states:::batch:submitJob
+            Parameters:
+              JobName.$: $.jobName
+              JobQueue.$: $.jobQueue
+              JobDefinition.$: $.jobDefinition
+              ContainerOverrides:
+                Environment:
+                  - Name: FILE_EVENT
+                    Value.$: $.payload
+              Tags:
+                App: CAMRIE
+                Compute: cpu
+                RoutingReason.$: $.routingReason
+            End: true
+            Catch:
+              - ErrorEquals: ["States.ALL"]
+                ResultPath: $.error
+                Next: FailureState
+          SubmitGpuJob:
+            Type: Task
+            Resource: arn:aws:states:::batch:submitJob
+            Parameters:
+              JobName.$: $.jobName
+              JobQueue.$: $.jobQueue
+              JobDefinition.$: $.jobDefinition
+              ContainerOverrides:
+                Environment:
+                  - Name: FILE_EVENT
+                    Value.$: $.payload
+              Tags:
+                App: CAMRIE
+                Compute: gpu
+                RoutingReason.$: $.routingReason
             End: true
             Catch:
               - ErrorEquals: ["States.ALL"]

@@ -708,34 +708,42 @@ def do_process(event, context=None, s3=None):
                 f"normal={geo['slice_normal']}, spin_factor={sim['spin_factor']})"
             )
 
-            pipeline.run_pipeline(
-                rho_path=rho_path,
-                t1_path=t1_path,
-                t2_path=t2_path,
-                sequence_file=seq_path,
-                output_dir=str(out_dir),
-                isocenter_mm=isocenter_mm,
-                slice_normal=geo["slice_normal"],
-                num_slices=geo["num_slices"],
-                slice_thickness_mm=geo["slice_thickness_mm"],
-                slice_gap_mm=geo["slice_gap_mm"],
-                fov_mm=geo["fov_mm"],
-                seq_fov_mm=geo["seq_fov_mm"],
-                matrix=geo["matrix"],
-                spin_factor=sim["spin_factor"],
-                b0=sim["b0"],
-                use_gpu=sim["use_gpu"],
-                n_threads=sim["n_threads"],
-                parallel_slices=sim["parallel_slices"],
-                apply_hamming=sim["apply_hamming"],
-                spins_per_voxel=sim["spins_per_voxel"],
-                spin_method=pipeline.normalize_spin_methods(sim["spin_method"]),
-                slice_padding=sim["slice_padding"],
-                t2star_factor=sim["t2star_factor"],
-                debug=False,
-            )
-            logger.write(f"Sequence completed: {job['name']}")
-            add_sequence_outputs(out, out_dir, job, multi_sequence, aux_dir)
+            try:
+                pipeline.run_pipeline(
+                    rho_path=rho_path,
+                    t1_path=t1_path,
+                    t2_path=t2_path,
+                    sequence_file=seq_path,
+                    output_dir=str(out_dir),
+                    isocenter_mm=isocenter_mm,
+                    slice_normal=geo["slice_normal"],
+                    num_slices=geo["num_slices"],
+                    slice_thickness_mm=geo["slice_thickness_mm"],
+                    slice_gap_mm=geo["slice_gap_mm"],
+                    fov_mm=geo["fov_mm"],
+                    seq_fov_mm=geo["seq_fov_mm"],
+                    matrix=geo["matrix"],
+                    spin_factor=sim["spin_factor"],
+                    b0=sim["b0"],
+                    use_gpu=sim["use_gpu"],
+                    n_threads=sim["n_threads"],
+                    parallel_slices=sim["parallel_slices"],
+                    apply_hamming=sim["apply_hamming"],
+                    spins_per_voxel=sim["spins_per_voxel"],
+                    spin_method=pipeline.normalize_spin_methods(sim["spin_method"]),
+                    slice_padding=sim["slice_padding"],
+                    t2star_factor=sim["t2star_factor"],
+                    debug=False,
+                )
+                seq_status = "succeeded"
+                logger.write(f"Sequence completed: {job['name']}")
+                add_sequence_outputs(out, out_dir, job, multi_sequence, aux_dir)
+            except RuntimeError as e:
+                seq_status = "failed"
+                logger.write(
+                    f"WARNING: Sequence {job['name']} failed — {e}. "
+                    f"Isocenter used: {isocenter_mm}, auto_isocenter: {auto_isocenter_mm}"
+                )
 
             sequence_results.append({
                 "index": job["index"],
@@ -745,8 +753,17 @@ def do_process(event, context=None, s3=None):
                 "geometry": geo,
                 "simulation": sim,
                 "isocenter_mm": isocenter_mm,
-                "status": "succeeded",
+                "status": seq_status,
             })
+
+        # If ALL sequences failed (0 spins), fail the entire job
+        succeeded = [r for r in sequence_results if r["status"] == "succeeded"]
+        if len(succeeded) == 0:
+            raise RuntimeError(
+                f"All {len(sequence_results)} sequence(s) produced 0 spins. "
+                f"The isocenter {sequence_results[0]['isocenter_mm']} is outside the body model. "
+                f"Auto-detected center: {auto_isocenter_mm}"
+            )
 
         manifest = {
             "schema": "camrie.multi_sequence.v1",
