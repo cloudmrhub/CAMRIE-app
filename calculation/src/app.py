@@ -457,6 +457,12 @@ def normalize_simulation(opts, sequence_spec):
     if "b0" not in base and marie_inputs.get("b0") is not None:
         base["b0"] = marie_inputs["b0"]
     sim = deep_merge(base, sequence_spec.get("simulation", {}) or {})
+    # Frontend may place simulation params directly on the sequence object (e.g. spin_factor, slice_padding)
+    seq_root_sim_keys = ("spin_factor", "slice_padding", "spins_per_voxel", "apply_hamming",
+                         "use_gpu", "b0", "n_threads", "parallel_slices", "t2star_factor", "spin_method")
+    for key in seq_root_sim_keys:
+        if key in sequence_spec:
+            sim[key] = sequence_spec[key]
     return {
         "b0": float(sim.get("b0", 3.0)),
         "spin_factor": int(sim.get("spin_factor", 1)),
