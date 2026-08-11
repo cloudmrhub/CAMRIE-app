@@ -570,20 +570,16 @@ def add_sequence_outputs(out, out_dir, job, multi_sequence, aux_dir):
         )
         logger.write(f"Added reconstruction: {recon_path}")
 
-    for ks_id, ks_suffix, ks_label in [
-        (10, "real", "K-Space Real"),
-        (11, "imag", "K-Space Imaginary"),
-        (12, "magnitude", "K-Space Magnitude"),
-    ]:
-        ks_path = out_path / f"kspace_{ks_suffix}.nii.gz"
-        if ks_path.exists():
-            out.addAble(
-                ima.Imaginable(str(ks_path)),
-                id=id_base + ks_id,
-                name=f"{label_prefix}{ks_label}".strip(),
-                type="output",
-                basename=f"{basename_prefix}kspace_{ks_suffix}.nii.gz",
-            )
+    ks_path = out_path / "kspace.nii.gz"
+    if ks_path.exists():
+        out.addAble(
+            ima.Imaginable(str(ks_path)),
+            id=id_base + 10,
+            name=f"{label_prefix}K-Space".strip(),
+            type="output",
+            basename=f"{basename_prefix}kspace.nii.gz",
+        )
+        logger.write(f"Added k-space: {ks_path}")
 
     series_spec_path = out_path / "series_spec.json"
     if series_spec_path.exists():
@@ -683,9 +679,6 @@ def do_process(event, context=None, s3=None):
         #
         # ID convention (matches old CAMRIE lambda):
         #   1   – Reconstruction (final 3-D NIfTI volume)
-        #  10   – K-space real
-        #  11   – K-space imaginary
-        #  12   – K-space magnitude
         # For multiple sequences, IDs are offset by sequence_index * 100.
         #
         out = ca.cmrOutput(app="CAMRIE")
@@ -815,6 +808,11 @@ def do_process(event, context=None, s3=None):
         out.setLog(logger)
         out.setOptions(opts)
         out.setTask(task_info)
+
+        # Enable MATLAB export if requested by frontend
+        output_request = info_json.get("output", {})
+        if output_request.get("matlab", False):
+            out.savematlab = True
 
         # ── 6. Export & upload ──────────────────────────────────────────────
         export_results = out.exportAndZipResultsToS3(
