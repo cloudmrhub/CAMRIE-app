@@ -253,6 +253,8 @@ Resources:
             Value: !Ref FailedBucketPName
           - Name: CAMRIE_THREADS
             Value: "4"
+          - Name: CAMRIE_PARALLEL_SLICES
+            Value: "2"
         LogConfiguration:
           LogDriver: awslogs
           Options:
@@ -361,7 +363,9 @@ Resources:
           - Name: FailedBucketName
             Value: !Ref FailedBucketPName
           - Name: CAMRIE_THREADS
-            Value: "4"
+            Value: "1"
+          - Name: CAMRIE_PARALLEL_SLICES
+            Value: "1"
         LogConfiguration:
           LogDriver: awslogs
           Options:

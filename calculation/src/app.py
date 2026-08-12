@@ -481,7 +481,7 @@ def normalize_simulation(opts, sequence_spec):
         "apply_hamming": truthy(sim.get("apply_hamming", True)),
         "spins_per_voxel": int(sim.get("spins_per_voxel", 0)),
         "spin_method": sim.get("spin_method", pipeline.DEFAULT_SPIN_METHOD),
-        "parallel_slices": int(sim.get("parallel_slices", 4)),
+        "parallel_slices": int(sim.get("parallel_slices", int(os.getenv("CAMRIE_PARALLEL_SLICES", "2")))),  
         "slice_padding": float(sim.get("slice_padding", 1.0)),
         "t2star_factor": float(sim.get("t2star_factor", 1.0)),
     }
