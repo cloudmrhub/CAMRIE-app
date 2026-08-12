@@ -194,6 +194,16 @@ def download_from_s3(file_info, s3=None):
     if "presigned_url" in file_info:
         logger.write(f"Downloading via presigned URL: {file_info.get('key', filename)}")
         r = requests.get(file_info["presigned_url"])
+        if r.status_code == 403 and "bucket" in file_info and "key" in file_info:
+            bucket = file_info["bucket"]
+            key = file_info["key"]
+            logger.write(f"Presigned URL expired (403), falling back to s3://{bucket}/{key}")
+            try:
+                return ca.getCMRFile(as_cmr_file_descriptor(file_info), s3=s3)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Presigned URL expired and direct S3 fallback failed for s3://{bucket}/{key}."
+                ) from exc
         r.raise_for_status()
         local_path.write_bytes(r.content)
     else:
