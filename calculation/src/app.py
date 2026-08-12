@@ -916,6 +916,38 @@ def main():
         print(f"Invalid JSON in FILE_EVENT: {e}")
         sys.exit(1)
 
+    # Handle SIGTERM (sent by Batch when job is cancelled/timed out)
+    # so that Brain gets a failure report instead of leaving pipeline pending.
+    import signal
+
+    def _sigterm_handler(signum, frame):
+        print("SIGTERM received — uploading failure bundle so Brain marks pipeline as failed.")
+        try:
+            import boto3 as _boto3
+            _s3 = _boto3.resource("s3")
+            _failed_bucket = os.getenv("FailedBucketName", "camrie-failed")
+            _headers = event.get("headers", {}) or {}
+            _opts = _headers.get("options", {}) or {}
+            _pipelineid = _opts.get("pipelineid") or _opts.get("pipeline") or event.get("pipeline", "unknown")
+            _user_id = event.get("user_id", "unknown")
+            _err_dir = create_random_temp_dir() / "ERROR_DIR"
+            _err_dir.mkdir(parents=True, exist_ok=True)
+            (_err_dir / "error.txt").write_text("Job was terminated externally (SIGTERM — cancelled or timed out by Batch).")
+            write_json_file(str(_err_dir / "event.json"), event)
+            write_json_file(str(_err_dir / "info.json"), {
+                "headers": {"options": {"pipelineid": _pipelineid, "pipeline": _pipelineid, "token": _opts.get("token", "")}},
+                "user_id": _user_id,
+            })
+            _zip = Path(shutil.make_archive(str(pick_random_path()), "zip", str(_err_dir)))
+            _key = f"CAMRIE/{_user_id}/{_zip.name}"
+            _s3.Bucket(_failed_bucket).upload_file(str(_zip), _key)
+            print(f"Failure bundle uploaded to s3://{_failed_bucket}/{_key}")
+        except Exception as _e:
+            print(f"SIGTERM handler failed to upload failure bundle: {_e}")
+        sys.exit(1)
+
+    signal.signal(signal.SIGTERM, _sigterm_handler)
+
     result = do_process(event, context=None)
     if result.get("statusCode", 500) != 200:
         print(f"Job failed (statusCode={result['statusCode']}). Exiting with 1.")
