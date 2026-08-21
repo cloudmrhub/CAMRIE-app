@@ -387,7 +387,11 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       Description: Submits a CAMRIE simulation job to AWS Batch.
-      Runtime: python3.11
+      # python3.11 was deprecated 2026-06-30: Lambda CREATION is disabled after
+      # 2026-07-31 and UPDATES after 2026-08-31, so the stack would stop
+      # deploying. This is the router runtime only and is independent of the
+      # container image's Python version, so it can move freely.
+      Runtime: python3.13
       Handler: index.lambda_handler
       Timeout: 60
       MemorySize: 256
