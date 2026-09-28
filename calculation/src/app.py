@@ -144,6 +144,20 @@ def parse_s3_url(url):
     return path, host.split(".")[0]
 
 
+def put_presigned(path, url, timeout=900):
+    """Upload a local file to a presigned S3 PUT URL (Mode 2 result delivery).
+
+    Streams the file rather than reading it into memory: result ZIPs with
+    k-space volumes can be hundreds of MB.
+    """
+    size = os.path.getsize(path)
+    with open(path, "rb") as fh:
+        r = requests.put(url, data=fh, headers={"Content-Length": str(size)},
+                         timeout=timeout)
+    r.raise_for_status()
+    return r
+
+
 def unwrap_file_descriptor(file_info):
     """Accept both internal descriptors and frontend {type:file, options:{...}}."""
     if file_info is None:
@@ -831,6 +845,24 @@ def do_process(event, context=None, s3=None):
             out.savematlab = True
 
         # ── 6. Export & upload ──────────────────────────────────────────────
+        # Mode 2 (user-owned compute): the task runs in the USER's AWS account
+        # and has no write access to CloudMRHub's buckets, so Brain supplies a
+        # presigned PUT URL instead. Mode 1 events never carry this field.
+        presigned_upload_url = info_json.get("presigned_upload_url")
+        if presigned_upload_url:
+            zip_path = out.exportAndZipResults()
+            try:
+                put_presigned(zip_path, presigned_upload_url)
+            finally:
+                try:
+                    os.remove(zip_path)
+                except OSError:
+                    pass
+            key, bucket = parse_s3_url(presigned_upload_url)
+            export_results = {"bucket": bucket, "key": key}
+            logger.write(f"Results uploaded via presigned URL: {export_results}")
+            return {"statusCode": 200, "body": json.dumps(export_results)}
+
         export_results = out.exportAndZipResultsToS3(
             bucket=result_bucket, deleteoutputzip=True, s3=s3
         )
@@ -866,9 +898,14 @@ def do_process(event, context=None, s3=None):
             shutil.make_archive(str(pick_random_path()), "zip", str(error_dir))
         )
         try:
-            key = f"CAMRIE/{user_id}/{zip_fail_path.name}"
-            s3.Bucket(failed_bucket).upload_file(str(zip_fail_path), key)
-            logger.write(f"Failure bundle uploaded to s3://{failed_bucket}/{key}")
+            failed_url = (info_json or {}).get("presigned_failed_upload_url")
+            if failed_url:
+                put_presigned(zip_fail_path, failed_url)
+                logger.write("Failure bundle uploaded via presigned URL")
+            else:
+                key = f"CAMRIE/{user_id}/{zip_fail_path.name}"
+                s3.Bucket(failed_bucket).upload_file(str(zip_fail_path), key)
+                logger.write(f"Failure bundle uploaded to s3://{failed_bucket}/{key}")
         except Exception:
             traceback.print_exc()
 
@@ -939,9 +976,14 @@ def main():
                 "user_id": _user_id,
             })
             _zip = Path(shutil.make_archive(str(pick_random_path()), "zip", str(_err_dir)))
-            _key = f"CAMRIE/{_user_id}/{_zip.name}"
-            _s3.Bucket(_failed_bucket).upload_file(str(_zip), _key)
-            print(f"Failure bundle uploaded to s3://{_failed_bucket}/{_key}")
+            _failed_url = event.get("presigned_failed_upload_url")
+            if _failed_url:
+                put_presigned(_zip, _failed_url)
+                print("Failure bundle uploaded via presigned URL")
+            else:
+                _key = f"CAMRIE/{_user_id}/{_zip.name}"
+                _s3.Bucket(_failed_bucket).upload_file(str(_zip), _key)
+                print(f"Failure bundle uploaded to s3://{_failed_bucket}/{_key}")
         except Exception as _e:
             print(f"SIGTERM handler failed to upload failure bundle: {_e}")
         sys.exit(1)

@@ -1,0 +1,338 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  CAMRIE Worker - Mode 2 (user-owned compute, zero cost at idle).
+  API Gateway + Lambda dispatcher + one-shot Fargate RunTask, deployed into the
+  USER's AWS account. CloudMR Brain POSTs jobs to /compute with presigned URLs
+  for inputs and the result, so no cross-account IAM or bucket policy is needed.
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC for Fargate tasks
+
+  SubnetId1:
+    Type: AWS::EC2::Subnet::Id
+    Description: First public subnet (needs internet for ECR pull and presigned S3)
+
+  SubnetId2:
+    Type: AWS::EC2::Subnet::Id
+    Description: Second public subnet
+
+  WorkerApiKey:
+    Type: String
+    NoEcho: true
+    MinLength: 16
+    Description: API key CloudMR Brain sends in X-API-Key. Required - an empty key would leave /compute open.
+
+  WorkerImageUri:
+    Type: String
+    Description: CAMRIE container image (public ECR, pullable from any account)
+    Default: "public.ecr.aws/r2m7t0q6/cloudmrhub/camrie-fargate:latest"
+
+  TaskCpu:
+    Type: String
+    Default: "4096"
+    AllowedValues: ["2048", "4096", "8192", "16384"]
+    Description: Fargate task vCPU units (4096 = 4 vCPU, matches Mode 1)
+
+  TaskMemory:
+    Type: String
+    Default: "16384"
+    Description: Fargate task memory in MiB; must be a legal pairing for TaskCpu
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 256
+    Runtime: python3.13
+    Architectures:
+      - x86_64
+
+Resources:
+
+  # ---------------------------------------------------------------------------
+  # Buckets in the user's account
+  #   EventsBucket  - oversized job payloads (ECS overrides cap at 8192 chars)
+  #   ResultsBucket - results/failures when a job arrives WITHOUT presigned
+  #                   URLs (manual tests, direct use). Brain jobs use presigned
+  #                   URLs and never land here.
+  # ---------------------------------------------------------------------------
+  EventsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireEvents
+            Status: Enabled
+            ExpirationInDays: 7
+
+  ResultsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  # ---------------------------------------------------------------------------
+  # API Gateway - public endpoint, $0 when idle
+  # ---------------------------------------------------------------------------
+  WorkerApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: Prod
+      Description: "CAMRIE Mode 2 Worker API"
+
+  # ---------------------------------------------------------------------------
+  # Lambda dispatcher - authenticates, launches one Fargate task per job
+  # ---------------------------------------------------------------------------
+  DispatcherFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: index.handler
+      InlineCode: |
+        import hmac
+        import json
+        import os
+        import uuid
+
+        import boto3
+
+        ecs = boto3.client("ecs")
+        s3 = boto3.client("s3")
+
+        CLUSTER = os.environ["CLUSTER_NAME"]
+        TASK_DEF = os.environ["TASK_DEFINITION"]
+        SUBNETS = json.loads(os.environ["SUBNETS"])
+        SECURITY_GROUP = os.environ["SECURITY_GROUP"]
+        API_KEY = os.environ["WORKER_API_KEY"]
+        EVENTS_BUCKET = os.environ["EVENTS_BUCKET"]
+
+        # ECS containerOverrides cap the whole override at 8192 chars. A CAMRIE
+        # job with presigned URLs for a bodymodel ZIP and several sequences can
+        # exceed that, so stash it and pass a pointer; app.py main() resolves it.
+        MAX_INLINE = 7000
+
+        def _resp(code, body):
+            return {"statusCode": code,
+                    "headers": {"Content-Type": "application/json"},
+                    "body": json.dumps(body)}
+
+        def handler(event, context):
+            if event.get("httpMethod") == "GET" and event.get("path") == "/health":
+                return _resp(200, {"status": "ok", "type": "fargate-on-demand",
+                                   "cluster": CLUSTER, "application": "CAMRIE"})
+
+            headers = {k.lower(): v for k, v in (event.get("headers") or {}).items()}
+            if not hmac.compare_digest(headers.get("x-api-key", ""), API_KEY):
+                return _resp(401, {"error": "Invalid API key"})
+
+            try:
+                body = json.loads(event.get("body") or "{}")
+            except Exception:
+                return _resp(400, {"error": "Invalid JSON body"})
+            if not isinstance(body, dict) or "task" not in body:
+                return _resp(400, {"error": "Body must be a CAMRIE job with a 'task' field"})
+
+            job_id = str(uuid.uuid4())
+            file_event = json.dumps(body)
+            if len(file_event) > MAX_INLINE:
+                key = f"events/{job_id}.json"
+                s3.put_object(Bucket=EVENTS_BUCKET, Key=key, Body=file_event.encode())
+                file_event = json.dumps({"s3_event_bucket": EVENTS_BUCKET,
+                                         "s3_event_key": key})
+
+            try:
+                r = ecs.run_task(
+                    cluster=CLUSTER,
+                    taskDefinition=TASK_DEF,
+                    launchType="FARGATE",
+                    networkConfiguration={"awsvpcConfiguration": {
+                        "subnets": SUBNETS,
+                        "securityGroups": [SECURITY_GROUP],
+                        "assignPublicIp": "ENABLED"}},
+                    overrides={"containerOverrides": [{
+                        "name": "worker",
+                        "environment": [{"name": "FILE_EVENT", "value": file_event}]}]},
+                    startedBy=f"camrie-{job_id[:28]}",
+                )
+            except Exception as e:
+                return _resp(500, {"error": str(e)})
+
+            if r.get("failures"):
+                return _resp(500, {"error": "Failed to launch task",
+                                   "failures": r["failures"]})
+
+            return _resp(202, {"status": "accepted", "job_id": job_id,
+                               "task_arn": r["tasks"][0]["taskArn"],
+                               "pipeline": body.get("pipeline")})
+      Environment:
+        Variables:
+          CLUSTER_NAME: !Ref WorkerCluster
+          TASK_DEFINITION: !Ref WorkerTaskDefinition
+          SUBNETS: !Sub '["${SubnetId1}","${SubnetId2}"]'
+          SECURITY_GROUP: !Ref FargateSecurityGroup
+          WORKER_API_KEY: !Ref WorkerApiKey
+          EVENTS_BUCKET: !Ref EventsBucket
+      Policies:
+        - Version: "2012-10-17"
+          Statement:
+            - Effect: Allow
+              Action: ecs:RunTask
+              Resource: !Ref WorkerTaskDefinition
+            - Effect: Allow
+              Action: iam:PassRole
+              Resource:
+                - !GetAtt TaskExecutionRole.Arn
+                - !GetAtt TaskRole.Arn
+            - Effect: Allow
+              Action: s3:PutObject
+              Resource: !Sub "${EventsBucket.Arn}/events/*"
+      Events:
+        Health:
+          Type: Api
+          Properties:
+            RestApiId: !Ref WorkerApi
+            Path: /health
+            Method: GET
+        Compute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref WorkerApi
+            Path: /compute
+            Method: POST
+
+  # ---------------------------------------------------------------------------
+  # Networking - outbound only
+  # ---------------------------------------------------------------------------
+  FargateSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: CAMRIE worker Fargate tasks (outbound for ECR and S3)
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+  WorkerCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub "${AWS::StackName}-cluster"
+
+  # ---------------------------------------------------------------------------
+  # IAM - scoped to this stack's buckets only. Presigned URLs need no IAM.
+  # ---------------------------------------------------------------------------
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CamrieWorkerS3Access
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub "${EventsBucket.Arn}/*"
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject]
+                Resource: !Sub "${ResultsBucket.Arn}/*"
+
+  WorkerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/ecs/${AWS::StackName}"
+      RetentionInDays: 14
+
+  # ---------------------------------------------------------------------------
+  # One-shot Fargate task - same image and entry point as Mode 1
+  # ---------------------------------------------------------------------------
+  WorkerTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub "${AWS::StackName}-task"
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      Cpu: !Ref TaskCpu
+      Memory: !Ref TaskMemory
+      EphemeralStorage:
+        SizeInGiB: 50
+      RuntimePlatform:
+        CpuArchitecture: X86_64
+        OperatingSystemFamily: LINUX
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      ContainerDefinitions:
+        - Name: worker
+          Image: !Ref WorkerImageUri
+          Essential: true
+          Environment:
+            - Name: ResultsBucketName
+              Value: !Ref ResultsBucket
+            - Name: FailedBucketName
+              Value: !Ref ResultsBucket
+            - Name: CAMRIE_THREADS
+              Value: "4"
+            - Name: CAMRIE_MODE
+              Value: mode_2
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref WorkerLogGroup
+              awslogs-region: !Ref "AWS::Region"
+              awslogs-stream-prefix: camrie
+
+Outputs:
+  WorkerEndpoint:
+    Description: "Public URL of the worker - registered with CloudMR Brain"
+    Value: !Sub "https://${WorkerApi}.execute-api.${AWS::Region}.amazonaws.com/Prod"
+  HealthEndpoint:
+    Description: "Health check URL"
+    Value: !Sub "https://${WorkerApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/health"
+  ComputeEndpoint:
+    Description: "Compute endpoint URL"
+    Value: !Sub "https://${WorkerApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/compute"
+  ClusterName:
+    Description: "ECS cluster name"
+    Value: !Ref WorkerCluster
+  ResultsBucketName:
+    Description: "Results/failures for jobs submitted without presigned URLs"
+    Value: !Ref ResultsBucket
+  EventsBucketName:
+    Description: "Oversized job payloads (auto-expire after 7 days)"
+    Value: !Ref EventsBucket

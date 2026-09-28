@@ -1,0 +1,4 @@
+# Worker manager (worker/manage.py) - runs on the user's machine, not in the container.
+# tkinter (GUI) ships with python.org / conda Python; on Debian/Ubuntu: apt install python3-tk
+boto3>=1.34
+requests>=2.31
