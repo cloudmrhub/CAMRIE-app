@@ -1,5 +1,8 @@
 # CAMRIE — Mode 2 (Self-Hosted Compute)
 
+> New user? Follow the step-by-step guide in [`CAMRIE-Mode2-README.md`](../CAMRIE-Mode2-README.md)
+> (IAM user, access keys, AWS profile, install, deploy, verify, teardown).
+
 Run CAMRIE k-space simulations in **your own AWS account**. Jobs are still
 submitted from the CAMRIE web app; CloudMR Brain forwards them to your worker,
 and results come back to the web app as usual. You pay only while a job runs.

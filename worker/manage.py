@@ -243,7 +243,7 @@ def cmd_deploy(args):
     print(f"  This takes 2-3 minutes...\n")
 
     cf = session.client("cloudformation")
-    with open(TEMPLATE_PATH) as f:
+    with open(TEMPLATE_PATH, encoding="utf-8") as f:
         template_body = f.read()
 
     params = [
@@ -509,7 +509,9 @@ def cmd_teardown(args):
         try:
             auth = brain_login(email, password)
             token = auth.get("id_token") or auth.get("idToken")
-            endpoint = cfg.get("endpoint") or outputs.get("WorkerEndpoint", "")
+            # The stack being deleted is the source of truth; config.toml may
+            # describe a different worker (other region/profile).
+            endpoint = outputs.get("WorkerEndpoint") or cfg.get("endpoint", "")
 
             resp = requests.get(
                 f"{BRAIN_API_URL}/api/computing-unit/list",
