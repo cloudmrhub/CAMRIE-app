@@ -16,7 +16,10 @@ Reads the endpoint and API key from ~/.camrie/config.toml (written by
 `manage.py deploy`). Exit code 0 only if a result ZIP arrives.
 """
 import argparse
+import gzip
 import json
+import shutil
+import tempfile
 import sys
 import time
 import uuid
@@ -31,7 +34,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import manage  # noqa: E402  (reuse config + stack lookup)
 
 REPO = Path(__file__).resolve().parents[1]
-PHANTOM = REPO / "calculation" / "phantom"
+# Small cylinder phantom shipped with the worker, so a fresh clone can run the
+# test (calculation/phantom/ is generated locally and gitignored).
+PHANTOM = Path(__file__).resolve().parent / "testdata" / "phantom"
 EXPIRES = 3 * 3600
 
 
@@ -42,6 +47,8 @@ def main():
     ap.add_argument("--region", default=None)
     ap.add_argument("--sequence",
                     default=str(REPO / "data" / "sequences" / "PD-Weighted_Spin_Echo.seq"))
+    ap.add_argument("--phantom-dir", default=str(PHANTOM),
+                    help="directory with rho/t1/t2 .nii or .nii.gz (default: worker/testdata/phantom)")
     ap.add_argument("--timeout", type=int, default=3600, help="seconds to wait")
     ap.add_argument("--keep", action="store_true", help="do not delete test objects")
     args = ap.parse_args()
@@ -69,8 +76,23 @@ def main():
     print(f"Bucket   s3://{bucket}/{run}/")
 
     seq = Path(args.sequence)
-    inputs = {"rho": PHANTOM / "rho.nii", "t1": PHANTOM / "t1.nii",
-              "t2": PHANTOM / "t2.nii", "sequence": seq}
+    pdir = Path(args.phantom_dir)
+
+    tmpdir = Path(tempfile.mkdtemp(prefix="camrie_smoke_"))
+
+    def pick(name):
+        # Upload plain .nii: app.py names downloads by the LAST suffix only,
+        # so "x.nii.gz" would land as "*.gz" and SimpleITK could not read it.
+        nii = pdir / f"{name}.nii"
+        gz = pdir / f"{name}.nii.gz"
+        if nii.exists() or not gz.exists():
+            return nii
+        out = tmpdir / f"{name}.nii"
+        with gzip.open(gz, "rb") as fi, open(out, "wb") as fo:
+            shutil.copyfileobj(fi, fo)
+        return out
+
+    inputs = {"rho": pick("rho"), "t1": pick("t1"), "t2": pick("t2"), "sequence": seq}
     for p in inputs.values():
         if not p.exists():
             sys.exit(f"missing input: {p}")

@@ -256,7 +256,7 @@ python worker/manage.py costs  --profile camrie              # estimated Fargate
 python worker/manage.py deploy --profile camrie --email <CLOUDMR_EMAIL> --alias "<WORKER_NAME>"   # update
 ```
 
-Running `deploy` again updates the stack in place (or reports that it is already up to date) and registers the worker again. If a duplicate entry appears in the computing-unit list, remove the older one.
+Running `deploy` again updates the stack in place (or reports that it is already up to date) and re-registers it. CloudMRHub keeps **one Mode 2 worker per user per app**: registering again updates that entry (same ID) with the new endpoint and alias. So deploying a second worker, for example in another region or AWS profile, replaces the first one in the computing-unit list. The first stack keeps running and costing nothing at idle until you tear it down.
 
 To test the deployed worker without the web app (no CloudMRHub login needed):
 
@@ -264,7 +264,7 @@ To test the deployed worker without the web app (no CloudMRHub login needed):
 python worker/smoke_test.py --profile camrie
 ```
 
-It uploads a small phantom to the worker's own bucket, runs one simulation, and prints `SMOKE TEST PASSED` when a result ZIP with k-space and reconstruction comes back.
+It uploads the small cylinder phantom bundled in `worker/testdata/phantom` and a sample sequence to the worker's own bucket, runs one simulation, and prints `SMOKE TEST PASSED` when a result ZIP with k-space and reconstruction comes back.
 
 ## 10. Tear down Mode 2
 

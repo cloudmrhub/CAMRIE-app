@@ -73,9 +73,9 @@ Then refresh the CAMRIE **Setup** page: your worker appears in the
 computing-unit list next to Mode 1. Select it and submit.
 
 Re-running `deploy` updates the stack in place (or skips it if nothing changed)
-and then calls register again. If a second entry shows up in the web app, remove
-the old one there. After `teardown`, a fresh `deploy` gives a new endpoint and
-API key.
+and re-registers it. CloudMRHub keeps one Mode 2 worker per user per app, so a
+second deploy (another region or profile) replaces the first in the web app's
+list; the first stack stays up until you tear it down.
 
 ## Manage
 
