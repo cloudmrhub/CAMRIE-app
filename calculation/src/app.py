@@ -688,6 +688,14 @@ def add_sequence_outputs(out, out_dir, job, multi_sequence, aux_dir):
         )
         logger.write(f"Added k-space: {ks_path}")
 
+    for extra in ("sequence_report.json", "configured_sequence.seq"):
+        extra_path = out_path / extra
+        if extra_path.exists():
+            add_auxiliary_file(
+                out, extra_path, aux_dir,
+                None if not multi_sequence else f"{slug}_{extra}",
+            )
+
     series_spec_path = out_path / "series_spec.json"
     if series_spec_path.exists():
         add_auxiliary_file(
@@ -836,6 +844,10 @@ def do_process(event, context=None, s3=None):
                     matrix=tools_matrix,
                     affine=affine,
                     output_grid=output_grid,
+                    # sequence file is a template: apply the frontend's
+                    # matrix/FOV when supported, else run as-is (see
+                    # sequence_report.json in the results)
+                    configure_sequence=affine is not None,
                     spin_factor=sim["spin_factor"],
                     b0=sim["b0"],
                     use_gpu=sim["use_gpu"],
