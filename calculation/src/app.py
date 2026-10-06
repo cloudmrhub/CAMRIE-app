@@ -460,19 +460,96 @@ def infer_slice_normal(geo):
     return [0, 0, 1]
 
 
+class GeometryConflictError(ValueError):
+    """Raised when a frontend geometry payload mixes mutually exclusive
+    explicit inputs (e.g. ``affine`` plus a conflicting ``slice_normal``)
+    rather than one being derived from the other. The full-affine path must
+    reject this instead of silently preferring one source and shifting the
+    prescription.
+    """
+
+
+def normalize_affine(geo):
+    """Validate and return ``geo["affine"]`` as a plain 4x4 list, or None.
+
+    The frontend's affine (see sequenceGeometry.ts) is already LPS mm,
+    voxel-index -> world, with no RAS sign flip and no unit conversion
+    needed here -- this function only validates shape/finiteness so a
+    malformed payload fails with a clear app-level error before reaching
+    camrie_tools (which performs the full geometric validation).
+    """
+    affine = geo.get("affine")
+    if affine is None:
+        return None
+    try:
+        arr = np.array(affine, dtype=np.float64)
+    except Exception as exc:
+        raise GeometryConflictError(f"geometry.affine is not numeric: {exc}") from exc
+    if arr.shape not in ((4, 4), (3, 4)):
+        raise GeometryConflictError(
+            f"geometry.affine must be 4x4 (or 3x4), got shape {arr.shape}")
+    if not np.all(np.isfinite(arr)):
+        raise GeometryConflictError("geometry.affine contains non-finite values")
+    return arr.tolist()
+
+
 def normalize_geometry(geo):
     geo = copy.deepcopy(geo or {})
     slice_info = geo.get("slice", {}) if isinstance(geo.get("slice"), dict) else {}
+    affine = normalize_affine(geo)
+
+    # When an explicit slice_normal is ALSO present alongside a full affine,
+    # the two must agree (within tolerance) or the prescription is
+    # ambiguous -- reject rather than silently preferring one.
+    if affine is not None and geo.get("slice_normal") is not None:
+        affine_normal = normalize_vector(
+            [affine[0][2], affine[1][2], affine[2][2]], [0, 0, 1])
+        explicit_normal = normalize_vector(geo["slice_normal"], [0, 0, 1])
+        if not np.allclose(affine_normal, explicit_normal, atol=1e-3):
+            raise GeometryConflictError(
+                f"geometry.affine's slice-normal column {affine_normal} conflicts with "
+                f"the explicit geometry.slice_normal {explicit_normal}; "
+                "the frontend should send only one authoritative source"
+            )
+
+    isocenter_mm = geo.get("isocenter_mm")
+    # isocenter_mm may be explicitly null (no body model loaded on the
+    # frontend / auto-centering not available); preserve that distinction
+    # from "key absent" so downstream auto-centering behavior (falling back
+    # to the body model's own auto-detected center) is unchanged either way.
     return {
-        "isocenter_mm": geo.get("isocenter_mm"),
+        "isocenter_mm": isocenter_mm,
         "slice_normal": infer_slice_normal(geo),
         "num_slices": int(geo.get("num_slices", slice_info.get("num_slices", 5))),
         "slice_thickness_mm": geo.get("slice_thickness_mm", slice_info.get("thickness_mm")),
         "slice_gap_mm": float(geo.get("slice_gap_mm", slice_info.get("gap_mm", 0.0))),
         "fov_mm": geo.get("fov_mm"),
         "seq_fov_mm": geo.get("seq_fov_mm", geo.get("fov_mm")),
+        # Frontend convention: [Nx, Ny] (readout, phase). Converted to the
+        # tools' [Ny, Nx] = (nP, nF) convention exactly once, at the
+        # run_pipeline() call site (see tools_matrix_from_frontend below) --
+        # not here, so this dict still reflects the frontend's own order for
+        # any other code/logging that reads job["geometry"]["matrix"].
         "matrix": geo.get("matrix"),
+        "affine": affine,
     }
+
+
+def tools_matrix_from_frontend(frontend_matrix):
+    """Convert the frontend's [Nx, Ny] matrix to the tools' [Ny, Nx] = (nP, nF).
+
+    Single, explicit conversion point. camrie_tools' run_pipeline/
+    reconstruct_from_kspace/compute_series_geometry all consume
+    matrix=(nP, nF)=(Ny, Nx); the frontend sends [Nx, Ny]. Do not swap this
+    a second time anywhere else.
+    """
+    if frontend_matrix is None:
+        return None
+    if len(frontend_matrix) != 2:
+        raise GeometryConflictError(
+            f"geometry.matrix must have exactly 2 elements [Nx, Ny], got {frontend_matrix!r}")
+    nx, ny = frontend_matrix
+    return (int(ny), int(nx))
 
 
 def normalize_simulation(opts, sequence_spec):
@@ -731,6 +808,17 @@ def do_process(event, context=None, s3=None):
                 f"normal={geo['slice_normal']}, spin_factor={sim['spin_factor']})"
             )
 
+            affine = geo.get("affine")
+            tools_matrix = tools_matrix_from_frontend(geo["matrix"])
+            # Full-affine path: the affine is authoritative for orientation,
+            # spacing, and per-slice placement (including in-plane rotation
+            # that slice_normal alone cannot represent) -- select the
+            # sequence-grid output so the reconstructed NIfTI preserves the
+            # sequence's own resolution/orientation instead of the body
+            # model's. Legacy (no-affine) payloads keep today's body-grid
+            # output unchanged.
+            output_grid = "sequence" if affine is not None else "body"
+
             try:
                 pipeline.run_pipeline(
                     rho_path=rho_path,
@@ -745,7 +833,9 @@ def do_process(event, context=None, s3=None):
                     slice_gap_mm=geo["slice_gap_mm"],
                     fov_mm=geo["fov_mm"],
                     seq_fov_mm=geo["seq_fov_mm"],
-                    matrix=geo["matrix"],
+                    matrix=tools_matrix,
+                    affine=affine,
+                    output_grid=output_grid,
                     spin_factor=sim["spin_factor"],
                     b0=sim["b0"],
                     use_gpu=sim["use_gpu"],
